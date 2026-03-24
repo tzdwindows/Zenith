@@ -1,5 +1,6 @@
-package com.zenith.render.backend.opengl.texture;
+package com.zenith.render.backend.opengl;
 
+import com.zenith.asset.AssetResource;
 import com.zenith.render.Font;
 import com.zenith.render.Texture;
 import com.zenith.render.backend.opengl.texture.GLTexture;
@@ -7,8 +8,11 @@ import org.lwjgl.BufferUtils;
 import org.lwjgl.stb.STBTTFontinfo;
 import org.lwjgl.stb.STBTruetype;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.file.Files;
@@ -17,136 +21,183 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static org.lwjgl.opengl.GL11.*;
+import static org.lwjgl.opengl.GL12.GL_CLAMP_TO_EDGE;
+import static org.lwjgl.opengl.GL33.GL_TEXTURE_SWIZZLE_RGBA;
 
 public class GLFont extends Font {
 
     private final Map<Character, Glyph> glyphs = new HashMap<>();
     private GLTexture texture;
-    private final float scale;
-    private int ascent, descent, lineGap;
+    private float scale;
+
+    // 初始测试建议使用 1024，稳定后再改 2048
+    private static final int ATLAS_SIZE = 1024;
+    private static final int PADDING = 2; // 增加间距防止采样污染
+
+    public GLFont(AssetResource resource, int fontSize) throws IOException {
+        this(loadResourceToDirectBuffer(resource), resource.getLocation().getPath(), fontSize);
+        resource.close();
+    }
 
     public GLFont(String path, int fontSize) throws IOException {
-        super(path, fontSize);
+        this(loadPathToDirectBuffer(path), path, fontSize);
+    }
 
-        // 1. 读取 TTF 文件到 ByteBuffer
-        byte[] bytes = Files.readAllBytes(Paths.get(path));
-        ByteBuffer ttfData = BufferUtils.createByteBuffer(bytes.length);
-        ttfData.put(bytes).flip();
+    private GLFont(ByteBuffer ttfData, String debugPath, int fontSize) throws IOException {
+        super(debugPath, fontSize);
 
-        // 2. 初始化 STB 字体信息
-        STBTTFontinfo info = STBTTFontinfo.create();
-        if (!STBTruetype.stbtt_InitFont(info, ttfData)) {
-            throw new IOException("Failed to initialize STBTrueType font info.");
+        try {
+            STBTTFontinfo info = STBTTFontinfo.create();
+            if (!STBTruetype.stbtt_InitFont(info, ttfData)) {
+                throw new IOException("STB failed to init font: " + debugPath);
+            }
+
+            this.scale = STBTruetype.stbtt_ScaleForPixelHeight(info, fontSize);
+
+            // 分配并手动清零
+            ByteBuffer atlasBitmap = MemoryUtil.memAlloc(ATLAS_SIZE * ATLAS_SIZE);
+            MemoryUtil.memSet(atlasBitmap, 0);
+
+            try {
+                bakeAtlas(info, atlasBitmap);
+                setupTexture(atlasBitmap);
+            } finally {
+                MemoryUtil.memFree(atlasBitmap);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            throw new IOException("Critical error during font loading: " + e.getMessage());
         }
+    }
 
-        // 3. 计算缩放和度量信息
-        this.scale = STBTruetype.stbtt_ScaleForPixelHeight(info, fontSize);
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            IntBuffer pAscent = stack.mallocInt(1);
-            IntBuffer pDescent = stack.mallocInt(1);
-            IntBuffer pLineGap = stack.mallocInt(1);
-            STBTruetype.stbtt_GetFontVMetrics(info, pAscent, pDescent, pLineGap);
-            this.ascent = pAscent.get(0);
-            this.descent = pDescent.get(0);
-            this.lineGap = pLineGap.get(0);
-        }
+    private void bakeAtlas(STBTTFontinfo info, ByteBuffer atlasBitmap) {
+        int curX = PADDING;
+        int curY = PADDING;
+        int maxRowHeight = 0;
 
-        // 4. 创建纹理图集 (Atlas)
-        // 注意：阿里妈妈大楷比较宽，建议使用 1024x1024 甚至更大，或者只加载常用字符
-        int atlasWidth = 1024;
-        int atlasHeight = 1024;
-        ByteBuffer bitmap = BufferUtils.createByteBuffer(atlasWidth * atlasHeight);
+        // 【重改】大幅缩减初始范围，先确保能跑通
+        String charset = generateTestCharset();
 
-        // 预定义要渲染的字符范围（常用中文+英文）
-        String charset = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
-                + "ZenithEngine测试阿里妈妈东方大楷渲染";
+        for (int i = 0; i < charset.length(); i++) {
+            char c = charset.charAt(i);
 
-        int x = 1;
-        int y = 1;
-        int rowHeight = 0;
-
-        for (char c : charset.toCharArray()) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 IntBuffer w = stack.mallocInt(1);
                 IntBuffer h = stack.mallocInt(1);
                 IntBuffer ox = stack.mallocInt(1);
                 IntBuffer oy = stack.mallocInt(1);
-
-                // 获取字符位图
-                ByteBuffer charPixels = STBTruetype.stbtt_GetCodepointBitmap(info, scale, scale, c, w, h, ox, oy);
-
-                // 换行逻辑
-                if (x + w.get(0) >= atlasWidth) {
-                    x = 1;
-                    y += rowHeight + 1;
-                    rowHeight = 0;
-                }
-
-                // 写入大位图
-                if (charPixels != null) {
-                    for (int i = 0; i < h.get(0); i++) {
-                        for (int j = 0; j < w.get(0); j++) {
-                            bitmap.put((y + i) * atlasWidth + (x + j), charPixels.get(i * w.get(0) + j));
-                        }
-                    }
-                }
-
-                // 计算水平间距
                 IntBuffer adv = stack.mallocInt(1);
+
+                // 获取位图
+                ByteBuffer charPixels = STBTruetype.stbtt_GetCodepointBitmap(info, scale, scale, c, w, h, ox, oy);
                 STBTruetype.stbtt_GetCodepointHMetrics(info, c, adv, null);
 
-                // 保存 Glyph 信息
+                int charW = w.get(0);
+                int charH = h.get(0);
+
+                // 换行逻辑
+                if (curX + charW + PADDING >= ATLAS_SIZE) {
+                    curX = PADDING;
+                    curY += maxRowHeight + PADDING;
+                    maxRowHeight = 0;
+                }
+
+                // 溢出检查
+                if (curY + charH + PADDING >= ATLAS_SIZE) {
+                    break;
+                }
+
+                if (charPixels != null) {
+                    // 安全拷贝：逐行 put，并在每行结束后重置 position
+                    for (int row = 0; row < charH; row++) {
+                        int atlasPos = (curY + row) * ATLAS_SIZE + curX;
+                        atlasBitmap.position(atlasPos);
+
+                        for (int col = 0; col < charW; col++) {
+                            atlasBitmap.put(charPixels.get(row * charW + col));
+                        }
+                    }
+                    STBTruetype.stbtt_FreeBitmap(charPixels);
+                }
+
                 Glyph glyph = new Glyph();
-                glyph.width = w.get(0);
-                glyph.height = h.get(0);
+                glyph.width = charW;
+                glyph.height = charH;
                 glyph.offsetX = ox.get(0);
                 glyph.offsetY = oy.get(0);
                 glyph.advance = (int) (adv.get(0) * scale);
-                // 归一化纹理坐标
-                glyph.u = x / (float) atlasWidth;
-                glyph.v = y / (float) atlasHeight;
-                glyph.u2 = (x + glyph.width) / (float) atlasWidth;
-                glyph.v2 = (y + glyph.height) / (float) atlasHeight;
+                glyph.u = curX / (float) ATLAS_SIZE;
+                glyph.v = curY / (float) ATLAS_SIZE;
+                glyph.u2 = (curX + charW) / (float) ATLAS_SIZE;
+                glyph.v2 = (curY + charH) / (float) ATLAS_SIZE;
 
                 glyphs.put(c, glyph);
 
-                x += w.get(0) + 1;
-                rowHeight = Math.max(rowHeight, h.get(0));
+                curX += charW + PADDING;
+                maxRowHeight = Math.max(maxRowHeight, charH);
             }
         }
+        atlasBitmap.rewind();
+    }
 
-        // 5. 生成 OpenGL 纹理
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1); // 必须！因为位图是 1 字节（GL_RED）对齐的
-        this.texture = new GLTexture(atlasWidth, atlasHeight, bitmap, GL_RED);
-        // 设置过滤参数，防止文字模糊
+    private String generateTestCharset() {
+        StringBuilder sb = new StringBuilder();
+        // 仅 ASCII + 常用标点 + 少量中文
+        for (char c = 32; c < 127; c++) sb.append(c);
+        sb.append("，。！？ZenithEngine渲染测试提示");
+
+        // 只加 500 个常用汉字测试稳定性
+        for (int i = 0x4E00; i <= 0x4FFF; i++) {
+            sb.append((char) i);
+        }
+        return sb.toString();
+    }
+
+    private void setupTexture(ByteBuffer atlasBitmap) {
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        this.texture = new GLTexture(ATLAS_SIZE, ATLAS_SIZE, atlasBitmap, GL_RED);
+
         this.texture.bind(0);
+        int[] swizzle = {GL_RED, GL_RED, GL_RED, GL_RED};
+        glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, swizzle);
+
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
 
-    @Override
-    public Texture getTexture() {
-        return texture;
+    // 辅助加载方法（保持不变）
+    private static ByteBuffer loadResourceToDirectBuffer(AssetResource resource) throws IOException {
+        try (InputStream is = resource.getInputStream();
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[32768];
+            int read;
+            while ((read = is.read(buffer)) != -1) baos.write(buffer, 0, read);
+            byte[] data = baos.toByteArray();
+            ByteBuffer direct = MemoryUtil.memAlloc(data.length);
+            direct.put(data).flip();
+            return direct;
+        }
     }
 
-    @Override
-    public Glyph getGlyph(char c) {
-        // 如果字符不在图集中，返回空格或默认字符
-        return glyphs.getOrDefault(c, glyphs.get(' '));
+    private static ByteBuffer loadPathToDirectBuffer(String path) throws IOException {
+        byte[] data = Files.readAllBytes(Paths.get(path));
+        ByteBuffer direct = MemoryUtil.memAlloc(data.length);
+        direct.put(data).flip();
+        return direct;
     }
 
-    @Override
-    public float getWidth(String text) {
-        float width = 0;
+    @Override public Texture getTexture() { return texture; }
+    @Override public Glyph getGlyph(char c) { return glyphs.getOrDefault(c, glyphs.get(' ')); }
+    @Override public float getWidth(String text) {
+        float w = 0;
+        if(text == null) return 0;
         for (char c : text.toCharArray()) {
             Glyph g = getGlyph(c);
-            if (g != null) width += g.advance;
+            if (g != null) w += g.advance;
         }
-        return width;
+        return w;
     }
-
-    @Override
-    public void dispose() {
-        if (texture != null) texture.dispose();
-    }
+    @Override public void dispose() { if (texture != null) texture.dispose(); }
 }

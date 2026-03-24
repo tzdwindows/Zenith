@@ -1,27 +1,127 @@
 package com.zenith.render.backend.opengl.buffer;
 
-import com.zenith.common.utils.InternalLogger;
-import static org.lwjgl.opengl.GL15.*;
+import com.zenith.asset.AssetResource;
+import com.zenith.render.VertexLayout;
+import com.zenith.render.backend.opengl.texture.GLTexture;
+import org.lwjgl.system.MemoryUtil;
 
-public abstract class GLBuffer {
-    protected int rendererID;
-    protected int target;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
-    public GLBuffer(int target) {
-        this.target = target;
-        this.rendererID = glGenBuffers();
+public class GLBufferBuilder {
+    private ByteBuffer buffer;
+    private int capacity;
+    private int vertices;
+    private VertexLayout layout;
+    private boolean building;
+
+    // [新增] 用于记录当前批次关联的纹理
+    private GLTexture currentTexture;
+
+    public GLBufferBuilder(int initialCapacity) {
+        this.capacity = initialCapacity;
+        this.buffer = MemoryUtil.memAlloc(initialCapacity);
+        this.buffer.order(ByteOrder.nativeOrder());
     }
 
-    public void bind() {
-        glBindBuffer(target, rendererID);
+    /**
+     * [新增方法] 允许直接传入 AssetResource。
+     * 内部会自动将其转换为 GLTexture 并关联到当前的绘制批次。
+     */
+    public GLBufferBuilder withTexture(AssetResource resource) throws IOException {
+        // 这里可以直接 new，或者从缓存/AssetManager 中获取
+        this.currentTexture = new GLTexture(resource);
+        return this;
     }
 
-    public void unbind() {
-        glBindBuffer(target, 0);
+    /**
+     * [新增方法] 也可以直接关联已有的 GLTexture 对象
+     */
+    public GLBufferBuilder withTexture(GLTexture texture) {
+        this.currentTexture = texture;
+        return this;
+    }
+
+    public void begin(VertexLayout layout) {
+        if (building) throw new IllegalStateException("Already building!");
+        this.building = true;
+        this.layout = layout;
+        this.vertices = 0;
+        this.currentTexture = null; // 每次开始重置纹理引用
+
+        this.buffer.clear();
+        this.buffer.order(ByteOrder.nativeOrder());
+    }
+
+    public GLTexture getCurrentTexture() {
+        return currentTexture;
+    }
+
+    private void ensureCapacity(int additionalBytes) {
+        if (buffer.position() + additionalBytes > capacity) {
+            int currentPos = buffer.position();
+            int newSize = capacity * 2 + additionalBytes;
+            this.buffer = MemoryUtil.memRealloc(buffer, newSize);
+            this.capacity = newSize;
+
+            this.buffer.position(currentPos);
+            this.buffer.order(ByteOrder.nativeOrder());
+        }
+    }
+
+    public GLBufferBuilder putFloat(float value) {
+        ensureCapacity(4);
+        buffer.putFloat(value);
+        return this;
+    }
+
+    public void endVertex() {
+        this.vertices++;
+    }
+
+    public RenderedBuffer end() {
+        if (!building) throw new IllegalStateException("Not building!");
+        this.building = false;
+
+        this.buffer.flip();
+        // 将当前的纹理信息也封装进 RenderedBuffer
+        return new RenderedBuffer(
+                buffer.slice().order(ByteOrder.nativeOrder()),
+                layout,
+                vertices,
+                currentTexture
+        );
     }
 
     public void dispose() {
-        glDeleteBuffers(rendererID);
-        InternalLogger.info("Buffer disposed: " + rendererID);
+        if (buffer != null) {
+            MemoryUtil.memFree(buffer);
+            buffer = null;
+        }
     }
+
+    /**
+     * [新增] 获取当前是否处于构建状态
+     */
+    public boolean isBuilding() {
+        return building;
+    }
+
+    /**
+     * [新增] 获取当前批次已经填充的顶点数量
+     */
+    public int getVertexCount() {
+        return vertices;
+    }
+
+    /**
+     * [修改后的 Record] 增加了 texture 字段
+     */
+    public static record RenderedBuffer(
+            ByteBuffer data,
+            VertexLayout layout,
+            int vertexCount,
+            GLTexture texture
+    ) {}
 }

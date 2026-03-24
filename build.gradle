@@ -5,11 +5,51 @@ plugins {
 group = 'com.zenith.engine'
 version = '1.0-SNAPSHOT'
 
+// 定义 LWJGL 版本和平台变量
+def lwjglVersion = "3.3.3"
+def jomlVersion = "1.10.5"
+def logbackVersion = "1.4.14"
+def slf4jVersion = "2.0.9"
+
+// 根据操作系统自动选择本地库
+project.ext.lwjglNatives = {
+    def os = System.getProperty("os.name").toLowerCase()
+    if (os.contains("win")) return "natives-windows"
+    if (os.contains("mac")) return "natives-macos"
+    return "natives-linux"
+}.call()
+
 repositories {
     mavenCentral()
 }
 
 dependencies {
+    // --- 1. 数学库 (JOML) ---
+    implementation "org.joml:joml:${jomlVersion}"
+
+    // --- 2. 渲染、音频、文件处理 (LWJGL 核心与插件) ---
+    implementation platform("org.lwjgl:lwjgl-bom:$lwjglVersion")
+
+    implementation "org.lwjgl:lwjgl"                 // 核心
+    implementation "org.lwjgl:lwjgl-glfw"            // 窗口与输入
+    implementation "org.lwjgl:lwjgl-opengl"          // 渲染 (OpenGL)
+    implementation "org.lwjgl:lwjgl-openal"          // 音频 (OpenAL)
+    implementation "org.lwjgl:lwjgl-stb"             // 文件处理 (图片加载)
+    implementation "org.lwjgl:lwjgl-assimp"          // 文件处理 (模型加载)
+
+    // 必须导入对应的本地二进制库 (Natives)
+    runtimeOnly "org.lwjgl:lwjgl::${project.lwjglNatives}"
+    runtimeOnly "org.lwjgl:lwjgl-glfw::${project.lwjglNatives}"
+    runtimeOnly "org.lwjgl:lwjgl-opengl::${project.lwjglNatives}"
+    runtimeOnly "org.lwjgl:lwjgl-openal::${project.lwjglNatives}"
+    runtimeOnly "org.lwjgl:lwjgl-stb::${project.lwjglNatives}"
+    runtimeOnly "org.lwjgl:lwjgl-assimp::${project.lwjglNatives}"
+
+    // --- 3. 日志库 (SLF4J + Logback) ---
+    implementation "org.slf4j:slf4j-api:${slf4jVersion}"
+    implementation "ch.qos.logback:logback-classic:${logbackVersion}"
+
+    // --- 4. 测试相关 ---
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'

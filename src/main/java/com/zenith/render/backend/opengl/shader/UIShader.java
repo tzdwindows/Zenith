@@ -1,6 +1,5 @@
-package com.zenith.ui.render.shader;
+package com.zenith.render.backend.opengl.shader;
 
-import com.zenith.render.backend.opengl.shader.GLShader;
 import org.joml.Matrix4f;
 
 public class UIShader extends GLShader {

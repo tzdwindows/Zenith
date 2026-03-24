@@ -1,4 +1,4 @@
-package com.zenith.ui.render.shader;
+package com.zenith.render.backend.opengl.shader;
 
 public class SolidColorUIShader extends UIShader {
     private static final String SHADER_NAME = "SolidColorUI_Shader";

@@ -1,21 +1,51 @@
-package com.zenith.render;
+package com.zenith.render.backend.opengl;
 
 import com.zenith.common.math.Transform;
+import com.zenith.render.Material;
+import com.zenith.render.Mesh;
+import com.zenith.render.Renderer;
+import com.zenith.render.Renderable;
 import com.zenith.render.backend.opengl.shader.StandardShader;
+import com.zenith.render.backend.opengl.shader.WaterShader;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * GLRenderer 负责管理 OpenGL 渲染管线的提交与执行。
+ */
 public class GLRenderer extends Renderer {
 
     private final List<RenderCommand> queue = new ArrayList<>();
     private final Matrix4f viewProjectionMatrix = new Matrix4f().identity();
 
+    // 临时存储光照和视角数据，实际项目中建议从 Scene 或 Camera 获取
+    private Vector3f lightPos = new Vector3f(10.0f, 10.0f, 10.0f);
+    private Vector3f viewPos = new Vector3f(0.0f, 5.0f, 10.0f);
+    private Vector3f lightDir = new Vector3f(0.5f, -1.0f, 0.3f).normalize();
+    private String lastShaderName = "None";
+    @Override
     public void setViewProjection(Matrix4f matrix) {
         if (matrix != null) {
             this.viewProjectionMatrix.set(matrix);
+        }
+    }
+
+    /**
+     * 设置渲染器当前使用的视角位置（用于计算水面反射/高光）
+     */
+    public void setViewPos(Vector3f pos) {
+        this.viewPos.set(pos);
+    }
+
+    /**
+     * 支持直接提交实现 Renderable 接口的对象
+     */
+    public void submit(Renderable renderable) {
+        if (renderable != null) {
+            submit(renderable.getMesh(), renderable.getMaterial(), renderable.getTransform());
         }
     }
 
@@ -29,30 +59,39 @@ public class GLRenderer extends Renderer {
         if (queue.isEmpty()) return;
 
         for (RenderCommand cmd : queue) {
-            // 1. 绑定 Shader 并设置材质基础属性 (u_TextColor, u_Texture 等)
             cmd.material.apply();
-
-            // 2. 获取 Shader 实例
             var shader = cmd.material.getShader();
-
-            // --- 核心修改：光照同步 ---
-            // 如果是 StandardShader，我们需要把在 Test1 中 addLight 进去的数据应用到 GPU
-            if (shader instanceof StandardShader standardShader) {
-                // 假设观察者在 Z=500 的位置，或者你可以通过 Renderer 传入摄像机位置
-                // 如果不调用 applyLights，u_LightCount 永远是 0
-                standardShader.applyLights(new Vector3f(640, 360, 500));
+            this.lastShaderName = shader.getClass().getSimpleName();
+            shader.setUniform("u_ViewProjection", viewProjectionMatrix);
+            if(shader.hasUniform("u_Model")) {
+                shader.setUniform("u_Model", cmd.transform.getModelMatrix());
             }
 
-            // 3. 提交变换矩阵
-            shader.setUniform("u_ViewProjection", viewProjectionMatrix);
-            shader.setUniform("u_Model", cmd.transform.getModelMatrix());
+            if (shader instanceof StandardShader standardShader) {
+                standardShader.applyLights(lightPos);
+            }
+            else if (shader instanceof WaterShader waterShader) {
+                waterShader.setUniform("u_ViewPos", viewPos);
+                waterShader.setUniform("u_LightDir", lightDir);
+            }
 
-            // 4. 执行绘制
-            cmd.mesh.render();
+            if (cmd.mesh != null) {
+                cmd.mesh.render();
+                this.drawCalls++;
+                int vCount = cmd.mesh.getVertexCount();
+                this.vertexCount += vCount;
+                this.triangleCount += vCount / 3;
+            }
         }
-
         queue.clear();
     }
 
+    public String getLastShaderName() {
+        return lastShaderName;
+    }
+
+    /**
+     * 内部记录类，用于暂存渲染指令
+     */
     private record RenderCommand(Mesh mesh, Material material, Transform transform) {}
 }

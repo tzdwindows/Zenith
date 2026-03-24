@@ -1,4 +1,4 @@
-package com.zenith.logic.scene.entity;
+package com.zenith.logic.component;
 
 import com.zenith.logic.scene.entity.Entity;
 import com.zenith.common.math.Transform;

@@ -1,4 +1,5 @@
 package com.zenith.ui.layout;
 
-public class HorizontalAlignment {
+public enum HorizontalAlignment {
+    LEFT, CENTER, RIGHT, FILL
 }

@@ -1,4 +1,5 @@
 package com.zenith.logic.event;
 
-public class EventPriority {
+public enum EventPriority {
+    LOWEST, LOW, NORMAL, HIGH, HIGHEST
 }
