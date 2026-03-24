@@ -1,0 +1,4 @@
+package com.zenith.logic.component;
+
+public class AIController {
+}
