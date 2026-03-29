@@ -70,13 +70,14 @@ public class Test extends ZenithEngine {
         // 地形
         terrainShader = new TerrainShader();
 
+        // --- 修改 Test.java ---
         terrainParams.hasGrassMap = true;
         terrainParams.hasRockMap = true;
         terrainParams.hasNormalMap = true;
-        terrainParams.uvScale = 8.0f;
-        terrainParams.amplitude = 85.0f;
-        terrainParams.frequency = 0.0025f;
-        terrainParams.snowHeight = 100.0f;
+        terrainParams.uvScale = 85.0f;
+        terrainParams.amplitude = 120.0f;
+        terrainParams.frequency = 0.0018f;
+        terrainParams.snowHeight = 75.0f;
 
         terrainShader.setMaterial(terrainParams);
 
