@@ -8,12 +8,10 @@ import static org.lwjgl.opengl.GL20.*;
 import static org.lwjgl.opengl.GL30.*;
 
 public class SceneFramebuffer {
-
     private int fbo;
     private int colorTex;
     private int depthTex;
 
-    // ====== 修复点 1: 增加用于备份的 FBO 和纹理 ID ======
     private int copyFbo;
     private int colorCopyTex;
     private int depthCopyTex;
@@ -34,26 +32,24 @@ public class SceneFramebuffer {
     private void init() {
         // 1. 初始化主场景 FBO
         fbo = glGenFramebuffers();
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-
         colorTex = createTexture(GL_RGBA16F, GL_RGBA, GL_FLOAT, GL_LINEAR);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTex, 0);
-
         depthTex = createTexture(GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT, GL_NEAREST);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTex, 0);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthTex, 0);
 
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
             throw new RuntimeException("Main FBO incomplete");
         }
 
-        // 2. 修复点 2: 初始化用于 Copy 的 FBO 和纹理 (只分配一次内存)
+        // 2. 初始化用于 Copy 的 FBO
         copyFbo = glGenFramebuffers();
-        glBindFramebuffer(GL_FRAMEBUFFER, copyFbo);
-
         colorCopyTex = createTexture(GL_RGBA16F, GL_RGBA, GL_FLOAT, GL_LINEAR);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorCopyTex, 0);
-
         depthCopyTex = createTexture(GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT, GL_NEAREST);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, copyFbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorCopyTex, 0);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthCopyTex, 0);
 
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
@@ -61,6 +57,31 @@ public class SceneFramebuffer {
         }
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+
+    /**
+     * 当窗口大小改变时调用此方法
+     */
+    public void resize(int newWidth, int newHeight) {
+        if (newWidth <= 0 || newHeight <= 0) return;
+        if (newWidth == this.width && newHeight == this.height) return;
+        this.width = newWidth;
+        this.height = newHeight;
+        updateTextureSize(colorTex, GL_RGBA16F, GL_RGBA, GL_FLOAT);
+        updateTextureSize(depthTex, GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT);
+        updateTextureSize(colorCopyTex, GL_RGBA16F, GL_RGBA, GL_FLOAT);
+        updateTextureSize(depthCopyTex, GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            throw new RuntimeException("Main FBO incomplete after resize");
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+
+    private void updateTextureSize(int texID, int internalFormat, int format, int type) {
+        glBindTexture(GL_TEXTURE_2D, texID);
+        glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, type, 0);
+        glBindTexture(GL_TEXTURE_2D, 0);
     }
 
     private int createTexture(int internalFormat, int format, int type, int filter) {
@@ -71,6 +92,7 @@ public class SceneFramebuffer {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_2D, 0);
         return tex;
     }
 
@@ -82,32 +104,21 @@ public class SceneFramebuffer {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 
-    // 修复点 3: 高效拷贝函数，不再创建销毁 FBO，也不再重新分配纹理内存
     public void copyToHistory() {
-        // 将主 FBO 的内容“闪传”到 Copy FBO
         glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, copyFbo);
-
-        // 同时拷贝颜色和深度
         glBlitFramebuffer(0, 0, width, height,
                 0, 0, width, height,
                 GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT,
                 GL_NEAREST);
-
-        // 恢复绑定到主 FBO，准备后续渲染（如水面）
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     }
 
     public int getColorTex() { return colorTex; }
     public int getDepthTex() { return depthTex; }
-
-    // 给水面 Shader 使用的纹理接口
     public int getColorCopyTex() { return colorCopyTex; }
     public int getDepthCopyTex() { return depthCopyTex; }
 
-    /**
-     * 将 FBO 内容最终绘制到屏幕主缓冲
-     */
     public void renderToScreen() {
         ensureScreenResources();
         glDisable(GL_DEPTH_TEST);
@@ -161,5 +172,7 @@ public class SceneFramebuffer {
         glDeleteTextures(colorCopyTex);
         glDeleteTextures(depthCopyTex);
         if (screenProgram != 0) glDeleteProgram(screenProgram);
+        if (quadVao != 0) glDeleteVertexArrays(quadVao);
+        if (quadVbo != 0) glDeleteBuffers(quadVbo);
     }
 }

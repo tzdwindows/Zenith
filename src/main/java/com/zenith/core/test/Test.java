@@ -220,7 +220,6 @@ public class Test extends ZenithEngine {
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glEnable(GL_DEPTH_TEST);
 
-        // 【关键修复 1】：禁用面剔除，让正反两面都可见
         glDisable(GL_CULL_FACE);
 
         glDepthMask(false);
@@ -228,7 +227,6 @@ public class Test extends ZenithEngine {
         waterEntity.getMesh().render();
 
         glDepthMask(true);
-        // 【关键修复 2】：渲染完后恢复（如果后续渲染需要的话）
         glEnable(GL_CULL_FACE);
     }
 

@@ -269,6 +269,7 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     @Override
     public void onResize(int w, int h) {
         glViewport(0, 0, w, h);
+        sceneFBO.resize(w, h);
         camera.getProjection().updateSize(w, h);
     }
 

@@ -14,7 +14,6 @@ import static org.lwjgl.system.MemoryUtil.NULL;
  * GLWindow 是 Window 接口的 OpenGL/GLFW 实现版本。
  */
 public class GLWindow implements Window {
-
     private long windowHandle;
     private String title;
     private int width, height;
@@ -54,7 +53,6 @@ public class GLWindow implements Window {
             throw new RuntimeException("Window Handle is NULL.");
         }
 
-        // 注册回调
         glfwSetFramebufferSizeCallback(windowHandle, (window, w, h) -> {
             this.width = w;
             this.height = h;
