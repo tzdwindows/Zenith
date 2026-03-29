@@ -102,29 +102,34 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     }
 
     private void loop() {
-        // 主循环
+        long handle = (window).getHandle();
         while (running && !window.shouldClose()) {
+            glfwPollEvents();
+            if (window.getWidth() <= 0 || window.getHeight() <= 0) {
+                try { Thread.sleep(50); } catch (InterruptedException ignored) {}
+                continue;
+            }
+            boolean isFocused = glfwGetWindowAttrib(handle, GLFW_FOCUSED) == GLFW_TRUE;
+            if (!isFocused) {
+                try {
+                    Thread.sleep(60);
+                } catch (InterruptedException ignored) {}
+            }
             float currentTime = (float) glfwGetTime();
             float deltaTime = currentTime - lastFrameTime;
             lastFrameTime = currentTime;
-
             if (deltaTime > 0.1f) deltaTime = 0.1f;
-
-            if (isCursorLocked) {
+            if (isCursorLocked && isFocused) {
                 updateCameraInput(deltaTime);
             }
-
             for (UIScreen screen : screens) {
                 if (screen.isVisible()) {
                     screen.update(deltaTime);
                 }
             }
-
             update(deltaTime);
-
             viewProjMatrix.set(camera.getProjection().getMatrix()).mul(camera.getViewMatrix());
             frustumIntersection.set(viewProjMatrix);
-
             sceneFBO.bind();
             glViewport(0, 0, window.getWidth(), window.getHeight());
             glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
