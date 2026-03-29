@@ -4,7 +4,7 @@
 #define highp
 
 #ifndef PI
-#define PI 3.14159265359
+#define PI  3.1415926535897932384626433832795
 #endif
 
 #define HALF_PI 1.570796327

@@ -6,9 +6,10 @@
 #include "../psrdnoise/psrdnoise3.glsl"
 
 struct TerrainMaterial {
-    bool  hasGrassMap;
-    bool  hasRockMap;
-    bool  hasNormalMap;
+// 将 bool 改为 float，增强 NVIDIA 兼容性
+    float hasGrassMap;
+    float hasRockMap;
+    float hasNormalMap;
     float uvScale;
 
     vec3  grassColor;
@@ -52,33 +53,19 @@ float computeTerrainHeight(vec2 worldPosXZ, TerrainMaterial mat) {
 }
 
 // ==========================================
-// 2. 大气环境光（已修复夜晚亮度问题）
+// 2. 大气环境光
 // ==========================================
 vec3 evaluateAtmosphericAmbient(vec3 N, vec3 lightDir) {
     float sunY = lightDir.y;
-
     vec3 nightSky   = vec3(0.01, 0.02, 0.05);
     vec3 sunsetSky  = vec3(0.60, 0.30, 0.15);
     vec3 daySky     = vec3(0.15, 0.30, 0.60);
-
-    vec3 skyColor;
-
-    if (sunY < 0.0) {
-        skyColor = mix(nightSky, sunsetSky, smoothstep(-0.2, 0.0, sunY));
-    } else {
-        skyColor = mix(sunsetSky, daySky, smoothstep(0.0, 0.3, sunY));
-    }
-
+    vec3 skyColor = (sunY < 0.0) ? mix(nightSky, sunsetSky, smoothstep(-0.2, 0.0, sunY))
+    : mix(sunsetSky, daySky, smoothstep(0.0, 0.3, sunY));
     float skyWeight = mix(0.3, 1.0, max(0.0, N.y));
-
-    // ✅ 修复：夜晚更暗
     float timeBrightness = mix(0.05, 1.0, smoothstep(-0.2, 0.2, sunY));
-
-    // ✅ 夜晚快速衰减
     float nightAtten = smoothstep(-0.05, -0.3, sunY);
-
     vec3 moonAmbient = vec3(0.02, 0.04, 0.08) * smoothstep(0.0, -0.2, sunY);
-
     return ((skyColor * skyWeight * timeBrightness) * (1.0 - nightAtten)) + moonAmbient;
 }
 
@@ -94,21 +81,17 @@ out float outRoughness,
 out float outGrassMask
 ) {
     float slope = 1.0 - normal.y;
-
     float rockWeight = smoothstep(0.15, 0.35, slope);
-
     float heightWeight = smoothstep(mat.snowHeight - 2.0, mat.snowHeight + 2.0, worldPos.y);
     float snowSlopeRetain = 1.0 - smoothstep(0.35, 0.55, slope);
     float snowWeight = heightWeight * snowSlopeRetain;
 
     vec3 albedo = mix(mat.grassColor, mat.rockColor, rockWeight);
     albedo = mix(albedo, mat.snowColor, snowWeight);
-
     float roughness = mix(0.85, 0.65, rockWeight);
     roughness = mix(roughness, 0.45, snowWeight);
 
     outGrassMask = (1.0 - rockWeight) * (1.0 - snowWeight);
-
     outAlbedo = albedo;
     outRoughness = roughness;
 }
@@ -142,16 +125,11 @@ float grassMask
     float V_vis = V_SmithGGXCorrelated(finalRoughness, NoV, NoL);
     vec3 Fr = (D * V_vis) * F_Schlick(vec3(0.04), LoH);
 
-    // 草地边缘柔光
     float sheen = pow(1.0 - NoV, 3.0) * NoL * 0.5;
     vec3 grassFuzz = finalAlbedo * sheen * grassMask;
-
     vec3 directLighting = (Fd + Fr + grassFuzz) * lightIntensity * NoL * 3.14159265;
-
-    // 次表面散射（草地）
     float sss = pow(max(0.0, dot(V, -L)), 6.0) * (1.0 - NoV) * 0.15;
     directLighting += finalAlbedo * vec3(1.2, 1.2, 0.5) * sss * lightIntensity * grassMask;
-
     vec3 ambientLighting = finalAlbedo * evaluateAtmosphericAmbient(N, lightDir);
 
     return directLighting + ambientLighting;

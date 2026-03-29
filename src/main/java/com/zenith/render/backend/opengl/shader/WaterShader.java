@@ -54,14 +54,11 @@ public class WaterShader extends GLShader {
                     "uniform sampler2D u_WaterNormalTex;\n" +
                     "uniform int u_HasNormalMap;\n" +
                     "\n" +
-                    "// ---------------------------------------------------------\n" +
-                    "// 核心魔法：无网格的自然随机散列函数\n" +
                     "vec2 hash2(vec2 p) {\n" +
                     "    p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));\n" +
                     "    return fract(sin(p) * 43758.5453123);\n" +
                     "}\n" +
                     "\n" +
-                    "// 原神风：平滑细胞水波 (Voronoi Caustics) 绝对不可能出现方块！\n" +
                     "float stylizedWaterRipple(vec2 uv, float time) {\n" +
                     "    vec2 i = floor(uv);\n" +
                     "    vec2 f = fract(uv);\n" +
@@ -70,7 +67,7 @@ public class WaterShader extends GLShader {
                     "        for (int x = -1; x <= 1; x++) {\n" +
                     "            vec2 neighbor = vec2(float(x), float(y));\n" +
                     "            vec2 point = hash2(i + neighbor);\n" +
-                    "            point = 0.5 + 0.5 * sin(time * 1.5 + 6.2831 * point); // 圆滑游动\n" +
+                    "            point = 0.5 + 0.5 * sin(time * 1.5 + 6.2831 * point);\n" +
                     "            vec2 diff = neighbor + point - f;\n" +
                     "            minDist = min(minDist, length(diff));\n" +
                     "        }\n" +
@@ -78,7 +75,6 @@ public class WaterShader extends GLShader {
                     "    return minDist;\n" +
                     "}\n" +
                     "\n" +
-                    "// 真实下雨：生成水面散开的同心圆波纹 (Rain Drop Rings)\n" +
                     "float getRainRings(vec2 uv, float time) {\n" +
                     "    vec2 id = floor(uv);\n" +
                     "    vec2 f = fract(uv);\n" +
@@ -86,20 +82,16 @@ public class WaterShader extends GLShader {
                     "    for (int y = -1; y <= 1; y++) {\n" +
                     "        for (int x = -1; x <= 1; x++) {\n" +
                     "            vec2 offset = vec2(float(x), float(y));\n" +
-                    "            vec2 hash = hash2(id + offset);\n" +
-                    "            vec2 center = offset + hash;\n" +
+                    "            vec2 h = hash2(id + offset);\n" +
+                    "            vec2 center = offset + h;\n" +
                     "            float dist = length(f - center);\n" +
-                    "            \n" +
-                    "            // 波纹扩散阶段控制\n" +
-                    "            float phase = fract(time * 1.2 + hash.x * 10.0);\n" +
-                    "            // 绘制一个空心圆圈，随距离衰减\n" +
-                    "            float ring = smoothstep(0.0, 0.06, phase - dist) * smoothstep(0.0, 0.06, dist - (phase - 0.1));\n" +
-                    "            r += ring * (1.0 - phase); // 圆圈散开后淡出\n" +
+                    "            float phase = fract(time * 1.2 + h.x * 10.0);\n" +
+                    "            float ring = smoothstep(0.0, 0.05, phase - dist) * smoothstep(0.0, 0.05, dist - (phase - 0.08));\n" +
+                    "            r += ring * (1.0 - phase);\n" +
                     "        }\n" +
                     "    }\n" +
                     "    return r;\n" +
                     "}\n" +
-                    "// ---------------------------------------------------------\n" +
                     "\n" +
                     "void main() {\n" +
                     "    vec2 screenUV = gl_FragCoord.xy / u_ScreenSize;\n" +
@@ -107,41 +99,37 @@ public class WaterShader extends GLShader {
                     "    vec3 L = normalize(u_LightDir);\n" +
                     "    vec3 tangentNormal = vec3(0.0, 0.0, 1.0);\n" +
                     "\n" +
-                    "    // 1. 基础水面法线计算\n" +
                     "    if (u_HasNormalMap == 1) {\n" +
-                    "        vec2 uv1 = vWorldPos.xz * u_NormalScale + u_Time * vec2(0.015, 0.01);\n" +
+                    "        vec2 flow1 = vec2(0.015, 0.010) * u_Time;\n" +
+                    "        vec2 flow2 = vec2(-0.020, 0.015) * u_Time;\n" +
+                    "        vec2 uv1 = vWorldPos.xz * u_NormalScale + flow1;\n" +
+                    "        vec2 uv2 = vWorldPos.xz * (u_NormalScale * 2.0) + flow2;\n" +
                     "        vec3 n1 = texture(u_WaterNormalTex, uv1).rgb * 2.0 - 1.0;\n" +
-                    "        vec2 uv2 = vWorldPos.xz * (u_NormalScale * 2.0) + u_Time * vec2(-0.02, 0.015);\n" +
                     "        vec3 n2 = texture(u_WaterNormalTex, uv2).rgb * 2.0 - 1.0;\n" +
                     "        tangentNormal = normalize(n1 + n2);\n" +
                     "        tangentNormal.xy *= u_NormalStrength;\n" +
                     "    } else {\n" +
-                    "        // 风格化自然游动波纹 (极其平滑，形如鱼鳞与波浪交叉)\n" +
-                    "        vec2 e = vec2(0.05, 0.0);\n" +
-                    "        float h0 = stylizedWaterRipple(vWorldPos.xz * 0.5, u_Time);\n" +
-                    "        float hx = stylizedWaterRipple(vWorldPos.xz * 0.5 + e.xy, u_Time);\n" +
-                    "        float hy = stylizedWaterRipple(vWorldPos.xz * 0.5 + e.yx, u_Time);\n" +
-                    "        // 转换成平滑的法线凹凸\n" +
-                    "        tangentNormal = normalize(vec3(h0 - hx, h0 - hy, 0.5));\n" +
-                    "        tangentNormal.xy *= u_NormalStrength * 2.0; \n" +
+                    "        vec2 e = vec2(0.06, 0.0);\n" +
+                    "        float h0 = stylizedWaterRipple(vWorldPos.xz * 0.45, u_Time);\n" +
+                    "        float hx = stylizedWaterRipple(vWorldPos.xz * 0.45 + e.xy, u_Time);\n" +
+                    "        float hy = stylizedWaterRipple(vWorldPos.xz * 0.45 + e.yx, u_Time);\n" +
+                    "        tangentNormal = normalize(vec3((h0 - hx), (h0 - hy), 0.55));\n" +
+                    "        tangentNormal.xy *= u_NormalStrength * 2.0;\n" +
                     "    }\n" +
                     "\n" +
-                    "    // 2. 完美的下雨散开涟漪 (Rain Drops)\n" +
                     "    if (u_RainIntensity > 0.0) {\n" +
                     "        float rain = getRainRings(vWorldPos.xz * 4.0, u_Time);\n" +
-                    "        // 将同心圆的明暗梯度转化为法线凹凸，产生真实的折射水花边缘\n" +
-                    "        tangentNormal.xy += vec2(rain, -rain) * u_RainIntensity * 1.5;\n" +
+                    "        tangentNormal.xy += vec2(rain, -rain) * u_RainIntensity * 1.2;\n" +
                     "    }\n" +
                     "\n" +
-                    "    // 3. 巨型交互水花波纹 (石头砸入水中)\n" +
                     "    for (int i = 0; i < 4; i++) {\n" +
                     "        vec4 splash = u_ActiveSplashes[i];\n" +
                     "        if (splash.w >= 0.0) {\n" +
                     "            vec2 dir = vWorldPos.xz - splash.xy;\n" +
                     "            float dist = length(dir);\n" +
-                    "            if (dist < splash.z) {\n" +
-                    "                float splashRipple = sin((dist - u_Time * 3.0) * 15.0) * (1.0 - dist / splash.z);\n" +
-                    "                tangentNormal.xy += normalize(dir) * splashRipple * splash.w * 0.8;\n" +
+                    "            if (dist < splash.z && dist > 0.0001) {\n" +
+                    "                float wave = sin((dist - u_Time * 3.0) * 15.0) * (1.0 - dist / splash.z);\n" +
+                    "                tangentNormal.xy += normalize(dir) * wave * splash.w * 0.75;\n" +
                     "            }\n" +
                     "        }\n" +
                     "    }\n" +
@@ -149,30 +137,31 @@ public class WaterShader extends GLShader {
                     "    tangentNormal = normalize(tangentNormal);\n" +
                     "    vec3 N = normalize(vTBN * tangentNormal);\n" +
                     "\n" +
-                    "    // ---------- 物理材质配置 ----------\n" +
                     "    WaterMaterial mat;\n" +
                     "    mat.deepColor = u_DeepColor;\n" +
                     "    mat.shallowColor = u_ShallowColor;\n" +
-                    "    // 原神风格的水面粗糙度变化极小，保持镜面般的锐利高光\n" +
-                    "    mat.roughness = mix(0.01, 0.1, clamp(u_RainIntensity, 0.0, 1.0));\n" +
-                    "    mat.clarity = 1.0; \n" +
+                    "    mat.roughness = mix(0.015, 0.09, clamp(u_RainIntensity, 0.0, 1.0));\n" +
+                    "    mat.clarity = 1.0;\n" +
                     "    mat.rainIntensity = u_RainIntensity;\n" +
-                    "    mat.foamColor = vec3(0.9, 0.95, 1.0);\n" +
+                    "    mat.foamColor = vec3(0.92, 0.96, 1.0);\n" +
                     "\n" +
                     "    vec3 color = shadeWaterPBR(vWorldPos, V, L, N, u_LightIntensity, mat, u_Time, screenUV);\n" +
-                    "\n" +
-                    "    // ACES 色调映射\n" +
                     "    color = (color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14);\n" +
-                    "    // Gamma 矫正\n" +
-                    "    FragColor = vec4(pow(color, vec3(1.0/2.2)), 1.0);\n" +
+                    "\n" +
+                    "    // Fresnel 控制透明度\n" +
+                    "    float NoV = clamp(dot(N, V), 0.001, 1.0);\n" +
+                    "    float F0 = 0.02;\n" +
+                    "    float fresnel = F0 + (1.0 - F0) * pow(1.0 - NoV, 5.0);\n" +
+                    "    float alpha = mix(0.92, 1.0, fresnel);\n" +
+                    "\n" +
+                    "    FragColor = vec4(pow(color, vec3(1.0 / 2.2)), alpha);\n" +
                     "}";
 
     public WaterShader() {
         super("WaterShader", VERTEX_SRC, FRAGMENT_SRC);
         bind();
-        setUniform("u_NormalScale", 0.05f);
-        // 原神风格的水面非常光滑，凹凸程度相对较弱
-        setUniform("u_NormalStrength", 0.3f);
+        setUniform("u_NormalScale", 0.06f);
+        setUniform("u_NormalStrength", 0.5f);
     }
 
     public void setMatrices(Matrix4f projection, Matrix4f view) {

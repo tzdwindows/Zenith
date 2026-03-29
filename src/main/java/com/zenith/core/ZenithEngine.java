@@ -104,49 +104,37 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     private void loop() {
         // 主循环
         while (running && !window.shouldClose()) {
-            // 计算帧时间
             float currentTime = (float) glfwGetTime();
             float deltaTime = currentTime - lastFrameTime;
             lastFrameTime = currentTime;
 
-            // 限制最大帧间隔，防止因卡顿导致更新过大
             if (deltaTime > 0.1f) deltaTime = 0.1f;
 
-            // 更新相机输入（如果鼠标锁定）
             if (isCursorLocked) {
                 updateCameraInput(deltaTime);
             }
 
-            // 更新所有可见的 UI 屏幕
             for (UIScreen screen : screens) {
                 if (screen.isVisible()) {
                     screen.update(deltaTime);
                 }
             }
 
-            // 更新游戏/场景逻辑
             update(deltaTime);
 
-            // 更新视图投影矩阵和裁剪体
             viewProjMatrix.set(camera.getProjection().getMatrix()).mul(camera.getViewMatrix());
             frustumIntersection.set(viewProjMatrix);
 
-            // 渲染到场景 FBO
             sceneFBO.bind();
             glViewport(0, 0, window.getWidth(), window.getHeight());
+            glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
             renderScene();
             sceneFBO.copyToHistory();
-            sceneFBO.bind();
             renderAfterOpaqueScene();
-
             sceneFBO.unbind();
-
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glViewport(0, 0, window.getWidth(), window.getHeight());
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
             sceneFBO.renderToScreen();
             renderUI(deltaTime);
             window.update();

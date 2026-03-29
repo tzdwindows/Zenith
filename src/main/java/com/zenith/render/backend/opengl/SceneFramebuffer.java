@@ -12,11 +12,15 @@ public class SceneFramebuffer {
     private int fbo;
     private int colorTex;
     private int depthTex;
+
+    // ====== 修复点 1: 增加用于备份的 FBO 和纹理 ID ======
+    private int copyFbo;
     private int colorCopyTex;
     private int depthCopyTex;
+
     private int width, height;
 
-    // ====== 用于 renderToScreen 的全屏 quad ======
+    // 用于渲染到屏幕的资源
     private int quadVao = 0;
     private int quadVbo = 0;
     private int screenProgram = 0;
@@ -28,35 +32,46 @@ public class SceneFramebuffer {
     }
 
     private void init() {
+        // 1. 初始化主场景 FBO
         fbo = glGenFramebuffers();
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 
-        // -------- Color --------
-        colorTex = glGenTextures();
-        glBindTexture(GL_TEXTURE_2D, colorTex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_FLOAT, 0);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        colorTex = createTexture(GL_RGBA16F, GL_RGBA, GL_FLOAT, GL_LINEAR);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTex, 0);
 
-        // -------- Depth --------
-        depthTex = glGenTextures();
-        glBindTexture(GL_TEXTURE_2D, depthTex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, width, height, 0, GL_DEPTH_COMPONENT, GL_FLOAT, 0);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        depthTex = createTexture(GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT, GL_NEAREST);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthTex, 0);
 
-        int status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-        if (status != GL_FRAMEBUFFER_COMPLETE) {
-            throw new RuntimeException("FBO not complete, status=" + status);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            throw new RuntimeException("Main FBO incomplete");
+        }
+
+        // 2. 修复点 2: 初始化用于 Copy 的 FBO 和纹理 (只分配一次内存)
+        copyFbo = glGenFramebuffers();
+        glBindFramebuffer(GL_FRAMEBUFFER, copyFbo);
+
+        colorCopyTex = createTexture(GL_RGBA16F, GL_RGBA, GL_FLOAT, GL_LINEAR);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorCopyTex, 0);
+
+        depthCopyTex = createTexture(GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT, GL_NEAREST);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthCopyTex, 0);
+
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            throw new RuntimeException("Copy FBO incomplete");
         }
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+
+    private int createTexture(int internalFormat, int format, int type, int filter) {
+        int tex = glGenTextures();
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, type, 0);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        return tex;
     }
 
     public void bind() {
@@ -67,189 +82,84 @@ public class SceneFramebuffer {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 
-    public int getColorTex() {
-        return colorTex;
+    // 修复点 3: 高效拷贝函数，不再创建销毁 FBO，也不再重新分配纹理内存
+    public void copyToHistory() {
+        // 将主 FBO 的内容“闪传”到 Copy FBO
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, copyFbo);
+
+        // 同时拷贝颜色和深度
+        glBlitFramebuffer(0, 0, width, height,
+                0, 0, width, height,
+                GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT,
+                GL_NEAREST);
+
+        // 恢复绑定到主 FBO，准备后续渲染（如水面）
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     }
 
-    public int getDepthTex() {
-        return depthTex;
-    }
+    public int getColorTex() { return colorTex; }
+    public int getDepthTex() { return depthTex; }
 
+    // 给水面 Shader 使用的纹理接口
+    public int getColorCopyTex() { return colorCopyTex; }
+    public int getDepthCopyTex() { return depthCopyTex; }
+
+    /**
+     * 将 FBO 内容最终绘制到屏幕主缓冲
+     */
     public void renderToScreen() {
         ensureScreenResources();
-
         glDisable(GL_DEPTH_TEST);
-        glDisable(GL_CULL_FACE);
-
         glUseProgram(screenProgram);
-
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, colorTex);
-        int loc = glGetUniformLocation(screenProgram, "u_Texture");
-        glUniform1i(loc, 0);
+        glUniform1i(glGetUniformLocation(screenProgram, "u_Texture"), 0);
 
         glBindVertexArray(quadVao);
         glDrawArrays(GL_TRIANGLES, 0, 6);
         glBindVertexArray(0);
-
-        glUseProgram(0);
-
         glEnable(GL_DEPTH_TEST);
-        glEnable(GL_CULL_FACE);
     }
 
     private void ensureScreenResources() {
-        if (screenProgram == 0) {
-            screenProgram = createScreenProgram();
-        }
-        if (quadVao == 0) {
-            createQuad();
-        }
+        if (screenProgram == 0) screenProgram = createScreenProgram();
+        if (quadVao == 0) createQuad();
     }
 
     private void createQuad() {
         float[] quadVertices = {
-                // pos      // uv
-                -1f,  1f,   0f, 1f,
-                -1f, -1f,   0f, 0f,
-                1f, -1f,   1f, 0f,
-
-                -1f,  1f,   0f, 1f,
-                1f, -1f,   1f, 0f,
-                1f,  1f,   1f, 1f
+                -1f,  1f,  0f, 1f,   -1f, -1f,  0f, 0f,    1f, -1f,  1f, 0f,
+                -1f,  1f,  0f, 1f,    1f, -1f,  1f, 0f,    1f,  1f,  1f, 1f
         };
-
         quadVao = glGenVertexArrays();
         quadVbo = glGenBuffers();
-
         glBindVertexArray(quadVao);
         glBindBuffer(GL_ARRAY_BUFFER, quadVbo);
         glBufferData(GL_ARRAY_BUFFER, quadVertices, GL_STATIC_DRAW);
-
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 2, GL_FLOAT, false, 4 * Float.BYTES, 0L);
-
         glEnableVertexAttribArray(1);
         glVertexAttribPointer(1, 2, GL_FLOAT, false, 4 * Float.BYTES, 2L * Float.BYTES);
-
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-        glBindVertexArray(0);
     }
 
     private int createScreenProgram() {
-        String vs = """
-                #version 330 core
-                layout (location = 0) in vec2 aPos;
-                layout (location = 1) in vec2 aTexCoord;
-
-                out vec2 vTexCoord;
-
-                void main() {
-                    vTexCoord = aTexCoord;
-                    gl_Position = vec4(aPos, 0.0, 1.0);
-                }
-                """;
-
-        String fs = """
-                #version 330 core
-                in vec2 vTexCoord;
-                out vec4 FragColor;
-
-                uniform sampler2D u_Texture;
-
-                void main() {
-                    FragColor = texture(u_Texture, vTexCoord);
-                }
-                """;
-
-        int vertexShader = glCreateShader(GL_VERTEX_SHADER);
-        glShaderSource(vertexShader, vs);
-        glCompileShader(vertexShader);
-        checkShader(vertexShader, "SCREEN_VERTEX");
-
-        int fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-        glShaderSource(fragmentShader, fs);
-        glCompileShader(fragmentShader);
-        checkShader(fragmentShader, "SCREEN_FRAGMENT");
-
-        int program = glCreateProgram();
-        glAttachShader(program, vertexShader);
-        glAttachShader(program, fragmentShader);
-        glLinkProgram(program);
-
-        if (glGetProgrami(program, GL_LINK_STATUS) == GL_FALSE) {
-            String log = glGetProgramInfoLog(program);
-            glDeleteShader(vertexShader);
-            glDeleteShader(fragmentShader);
-            glDeleteProgram(program);
-            throw new RuntimeException("Screen program link failed:\n" + log);
-        }
-
-        glDeleteShader(vertexShader);
-        glDeleteShader(fragmentShader);
-
-        return program;
-    }
-
-    private void checkShader(int shader, String name) {
-        if (glGetShaderi(shader, GL_COMPILE_STATUS) == GL_FALSE) {
-            String log = glGetShaderInfoLog(shader);
-            glDeleteShader(shader);
-            throw new RuntimeException(name + " compile failed:\n" + log);
-        }
+        String vs = "#version 330 core\nlayout(location=0)in vec2 aPos;layout(location=1)in vec2 aUV;out vec2 vUV;void main(){vUV=aUV;gl_Position=vec4(aPos,0.0,1.0);}";
+        String fs = "#version 330 core\nin vec2 vUV;out vec4 c;uniform sampler2D u_Texture;void main(){c=texture(u_Texture,vUV);}";
+        int p = glCreateProgram();
+        int v = glCreateShader(GL_VERTEX_SHADER); glShaderSource(v, vs); glCompileShader(v);
+        int f = glCreateShader(GL_FRAGMENT_SHADER); glShaderSource(f, fs); glCompileShader(f);
+        glAttachShader(p, v); glAttachShader(p, f); glLinkProgram(p);
+        return p;
     }
 
     public void dispose() {
-        if (screenProgram != 0) {
-            glDeleteProgram(screenProgram);
-            screenProgram = 0;
-        }
-        if (quadVbo != 0) {
-            glDeleteBuffers(quadVbo);
-            quadVbo = 0;
-        }
-        if (quadVao != 0) {
-            glDeleteVertexArrays(quadVao);
-            quadVao = 0;
-        }
-        if (colorTex != 0) {
-            glDeleteTextures(colorTex);
-            colorTex = 0;
-        }
-        if (depthTex != 0) {
-            glDeleteTextures(depthTex);
-            depthTex = 0;
-        }
-        if (fbo != 0) {
-            glDeleteFramebuffers(fbo);
-            fbo = 0;
-        }
-    }
-
-    public void copyToHistory() {
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
-
-        int copyFbo = glGenFramebuffers();
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, copyFbo);
-
-        // 颜色复制
-        glBindTexture(GL_TEXTURE_2D, colorCopyTex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_FLOAT, (java.nio.ByteBuffer) null);
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorCopyTex, 0);
-        glReadBuffer(GL_COLOR_ATTACHMENT0);
-        glDrawBuffer(GL_COLOR_ATTACHMENT0);
-        glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-
-        // 深度复制
-        glBindTexture(GL_TEXTURE_2D, depthCopyTex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, width, height, 0, GL_DEPTH_COMPONENT, GL_FLOAT, (java.nio.ByteBuffer) null);
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthCopyTex, 0);
-        glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glDeleteFramebuffers(fbo);
         glDeleteFramebuffers(copyFbo);
+        glDeleteTextures(colorTex);
+        glDeleteTextures(depthTex);
+        glDeleteTextures(colorCopyTex);
+        glDeleteTextures(depthCopyTex);
+        if (screenProgram != 0) glDeleteProgram(screenProgram);
     }
-
-    public int getColorCopyTex() { return colorCopyTex; }
-    public int getDepthCopyTex() { return depthCopyTex; }
 }

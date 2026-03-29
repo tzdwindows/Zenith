@@ -11,7 +11,6 @@ struct SkyParameters {
     float time;
 };
 
-#define PI 3.14159265359
 #define EARTH_RADIUS 6371.0
 #define CLOUD_START 1.5
 

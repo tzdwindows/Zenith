@@ -1,7 +1,9 @@
 #ifndef FILAMENT_BRDF_GLSL
 #define FILAMENT_BRDF_GLSL
 
+#ifndef PI
 #define PI 3.1415926535897932384626433832795
+#endif
 
 float pow5(float x) {
     float x2 = x * x;
