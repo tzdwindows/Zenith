@@ -15,8 +15,6 @@ public class GLBufferBuilder {
     private int vertices;
     private VertexLayout layout;
     private boolean building;
-
-    // [新增] 用于记录当前批次关联的纹理
     private GLTexture currentTexture;
 
     public GLBufferBuilder(int initialCapacity) {
@@ -26,17 +24,16 @@ public class GLBufferBuilder {
     }
 
     /**
-     * [新增方法] 允许直接传入 AssetResource。
+     * 允许直接传入 AssetResource。
      * 内部会自动将其转换为 GLTexture 并关联到当前的绘制批次。
      */
     public GLBufferBuilder withTexture(AssetResource resource) throws IOException {
-        // 这里可以直接 new，或者从缓存/AssetManager 中获取
         this.currentTexture = new GLTexture(resource);
         return this;
     }
 
     /**
-     * [新增方法] 也可以直接关联已有的 GLTexture 对象
+     * 也可以直接关联已有的 GLTexture 对象
      */
     public GLBufferBuilder withTexture(GLTexture texture) {
         this.currentTexture = texture;
@@ -102,17 +99,31 @@ public class GLBufferBuilder {
     }
 
     /**
-     * [新增] 获取当前是否处于构建状态
+     * 获取当前是否处于构建状态
      */
     public boolean isBuilding() {
         return building;
     }
 
     /**
-     * [新增] 获取当前批次已经填充的顶点数量
+     * 获取当前批次已经填充的顶点数量
      */
     public int getVertexCount() {
         return vertices;
+    }
+
+    /**
+     * 获取当前缓冲区已写入的字节数
+     */
+    public int getUsedBytes() {
+        return buffer != null ? buffer.position() : 0;
+    }
+
+    /**
+     * 获取当前缓冲区的总容量（字节）
+     */
+    public int getCapacity() {
+        return capacity;
     }
 
     /**

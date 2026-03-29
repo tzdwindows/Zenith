@@ -20,8 +20,6 @@ public class GLRenderer extends Renderer {
 
     private final List<RenderCommand> queue = new ArrayList<>();
     private final Matrix4f viewProjectionMatrix = new Matrix4f().identity();
-
-    // 临时存储光照和视角数据，实际项目中建议从 Scene 或 Camera 获取
     private Vector3f lightPos = new Vector3f(10.0f, 10.0f, 10.0f);
     private Vector3f viewPos = new Vector3f(0.0f, 5.0f, 10.0f);
     private Vector3f lightDir = new Vector3f(0.5f, -1.0f, 0.3f).normalize();

@@ -312,6 +312,14 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
         }
     }
 
+    public SceneFramebuffer getSceneFBO() {
+        return sceneFBO;
+    }
+
+    public Window getWindow() {
+        return window;
+    }
+
     /**
      * 移除指定的覆盖层
      */
