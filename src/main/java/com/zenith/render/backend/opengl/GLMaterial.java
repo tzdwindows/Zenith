@@ -2,6 +2,7 @@ package com.zenith.render.backend.opengl;
 
 import com.zenith.asset.AssetIdentifier;
 import com.zenith.asset.AssetResource;
+import com.zenith.asset.Resource;
 import com.zenith.common.math.Color;
 import com.zenith.render.Material;
 import com.zenith.render.Shader;
@@ -18,9 +19,8 @@ public class GLMaterial extends Material {
 
     public GLMaterial(Shader shader) {
         super(shader);
-        AssetIdentifier id = new AssetIdentifier("zenith", "font/HarmonyOS_Sans_SC_Regular.ttf");
         try {
-            font = new GLFont(Objects.requireNonNull(AssetResource.loadFromResources(id)), 32);
+            font = new GLFont(Resource.getFontResource(), 32);
             textRenderer = new GLTextRenderer(GLShaderRegistry.get(GLShaderRegistry.UI_TEXT));
         } catch (IOException e) {
             throw new RuntimeException(e);

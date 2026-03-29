@@ -1,5 +1,6 @@
 package com.zenith.render.backend.opengl.test;
 
+import com.zenith.common.math.Color; // 新增导入
 import com.zenith.common.utils.InternalLogger;
 import com.zenith.render.Window;
 import com.zenith.render.VertexLayout;
@@ -15,6 +16,7 @@ import org.joml.Vector4f;
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL20.*;
+import static org.lwjgl.opengl.GL30.*; // 用于部分高级 GL 状态
 
 public class Test6 {
     private static Vector3f camPos = new Vector3f(0, 6, 40);
@@ -26,6 +28,10 @@ public class Test6 {
     private static boolean firstMouse = true;
     private static boolean[] keys = new boolean[1024];
 
+    // 动态追踪窗口大小，传给水面计算折射
+    private static int winWidth = 1280;
+    private static int winHeight = 720;
+
     private static Vector4f[] splashData = new Vector4f[4];
     static {
         for (int i = 0; i < 4; i++) splashData[i] = new Vector4f(0, 0, 0, -1.0f);
@@ -36,16 +42,16 @@ public class Test6 {
     public static void main(String[] args) throws Exception {
         InternalLogger.info("Starting Test6: Cinematic GPU Rain Simulation...");
 
-        GLWindow window = new GLWindow("Zenith Engine - Cinematic Storm", 1280, 720);
+        GLWindow window = new GLWindow("Zenith Engine - Cinematic Storm", winWidth, winHeight);
         window.init();
         glfwSetInputMode(window.getHandle(), GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
         GLCamera camera = new GLCamera();
-        camera.getProjection().updateSize(1280, 720);
+        camera.getProjection().updateSize(winWidth, winHeight);
 
         SkyShader skyShader = new SkyShader();
         WaterShader waterShader = new WaterShader();
-        RainShader rainShader = new RainShader(); // 加载新的 GPU 雨水着色器
+        RainShader rainShader = new RainShader();
 
         VertexLayout layout = new VertexLayout();
         layout.pushFloat("aPos", 3);
@@ -63,7 +69,6 @@ public class Test6 {
         GLMesh skyBox = new GLMesh(skyData.length / 20, layout);
         skyBox.updateVertices(skyData);
 
-        // --- 核心：生成包含四万个面片的超级网格 ---
         float[] gpuRainData = generateGPURainMesh(RAIN_COUNT);
         GLMesh rainMesh = new GLMesh(gpuRainData.length / 20, layout);
         rainMesh.updateVertices(gpuRainData);
@@ -82,14 +87,18 @@ public class Test6 {
                         (float)(Math.sin(Math.toRadians(pitch))),
                         (float)(Math.sin(Math.toRadians(yaw)) * Math.cos(Math.toRadians(pitch)))).normalize();
             }
-            @Override public void onResize(int w, int h) { glViewport(0, 0, w, h); camera.getProjection().updateSize(w, h); }
+            @Override public void onResize(int w, int h) {
+                glViewport(0, 0, w, h);
+                camera.getProjection().updateSize(w, h);
+                winWidth = w;
+                winHeight = h;
+            }
             @Override public void onMouseButton(int b, int a, int m) {}
             @Override public void onScroll(double x, double y) {}
         });
 
         glEnable(GL_DEPTH_TEST);
         glEnable(GL_BLEND);
-        // 雨滴使用叠加混合 (Additive-like Blending) 增强高光质感
         glBlendFunc(GL_SRC_ALPHA, GL_ONE);
 
         long lastTime = System.currentTimeMillis();
@@ -106,12 +115,14 @@ public class Test6 {
             camera.getTransform().setPosition(camPos.x, camPos.y, camPos.z);
             camera.lookAt(new Vector3f(camPos).add(camFront), camUp);
 
-            glClearColor(0.05f, 0.08f, 0.1f, 1.0f); // 让环境更暗，衬托出白色的雨丝
+            glClearColor(0.05f, 0.08f, 0.1f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
             Matrix4f view = camera.getViewMatrix();
             Matrix4f proj = camera.getProjectionMatrix();
+            // 暴雨环境下的太阳光可以设得微弱一点，或者保留一点天光反光
             Vector3f sunDir = new Vector3f(0.8f, 0.3f, 0.8f).normalize();
+            Vector3f lightIntensity = new Vector3f(1.5f, 1.5f, 1.5f);
 
             // --- 1. 天空 ---
             glDepthFunc(GL_LEQUAL);
@@ -126,37 +137,48 @@ public class Test6 {
             glDepthMask(true);
             glDepthFunc(GL_LESS);
 
-            // --- 2. 水面 ---
-            // 恢复正常的透明度混合
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            // --- 2. 真实物理水面 ---
+            glDepthMask(false); // 半透明不写入深度
+            glDisable(GL_BLEND); // 重点：水面靠折射，不要开 Alpha 混合！
+
             waterShader.bind();
+            waterShader.setMatrices(proj, view);
             waterShader.setUniform("u_ViewProjection", new Matrix4f(proj).mul(view));
             waterShader.setUniform("u_Model", new Matrix4f().translation(0, 0, 0));
-            waterShader.setUniform("u_ViewPos", camPos);
-            waterShader.setUniform("u_LightDir", sunDir);
-            waterShader.setUniform("u_Time", time);
-            waterShader.setUniform("u_DeepColor", new Vector3f(0.01f, 0.05f, 0.12f));
-            waterShader.setUniform("u_ShallowColor", new Vector3f(0.0f, 0.45f, 0.6f));
-            waterShader.setRainIntensity(0.9f);
+            waterShader.setScreenSize(winWidth, winHeight);
+
+            // 因为这是测试用例，我们没有法线贴图，传null即可使用平滑物理计算
+            waterShader.bindWaterNormal(null);
+
+            // 使用新封装的 Uniform 方法
+            waterShader.updateUniforms(
+                    camPos,
+                    sunDir,
+                    lightIntensity,
+                    new Color(0.01f, 0.05f, 0.12f), // 深水颜色
+                    new Color(0.1f, 0.45f, 0.6f),   // 浅水颜色
+                    time,
+                    0.9f // 下雨强度非常大
+            );
             waterShader.setSplashes(splashData);
             waterMesh.render();
 
+            glDepthMask(true);
+
             // --- 3. 渲染 GPU 暴雨 ---
-            glDepthMask(false); // 半透明不写深度
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE); // 发光混合模式
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE); // 恢复发光混合模式渲染雨丝
+            glDepthMask(false);
 
             rainShader.bind();
             rainShader.setUniform("u_ViewProjection", new Matrix4f(proj).mul(view));
             rainShader.setUniform("u_ViewPos", camPos);
             rainShader.setUniform("u_Time", time);
-            // 给定一个风向和风力 (X 轴和 Z 轴的偏移强度)
             rainShader.setUniform("u_Wind", new Vector2f(-0.5f, -0.2f));
-
             rainShader.setUniform("u_SunDir", sunDir);
-            rainShader.setUniform("u_SunIntensity", new Vector3f(2.0f, 2.0f, 2.0f));
+            rainShader.setUniform("u_SunIntensity", lightIntensity);
             rainShader.setUniform("u_AmbientSkyColor", new Vector3f(0.2f, 0.3f, 0.4f));
 
-            // 一次 Draw Call 渲染四万滴雨，极为震撼
             rainMesh.render();
 
             glDepthMask(true);
@@ -167,43 +189,32 @@ public class Test6 {
         window.dispose();
     }
 
-    // --- 一次性生成 40,000 个面片的顶点数据，所有动画全部交给 GPU ---
+    // --- GPU 雨水数据生成 ---
     private static float[] generateGPURainMesh(int count) {
         float[] v = new float[count * 4 * 20];
-        int p = 0;
-
         for (int i = 0; i < count; i++) {
-            // 修正：让雨滴分布在以原点为中心的 [-40, 40] 范围内
             float rx = (float) Math.random() * 80f - 40f;
             float ry = (float) Math.random() * 40f;
             float rz = (float) Math.random() * 80f - 40f;
             float speed = 40.0f + (float) Math.random() * 40.0f;
 
             int base = i * 4;
-            // 这里的 rx, ry, rz 会传递给 aColor (location 3)
             fillVert(v, base,     -0.015f,  1.5f, 0,  rx, ry, rz, speed,  0, 0);
             fillVert(v, base + 1, -0.015f, -1.5f, 0,  rx, ry, rz, speed,  0, 1);
             fillVert(v, base + 2,  0.015f, -1.5f, 0,  rx, ry, rz, speed,  1, 1);
             fillVert(v, base + 3,  0.015f,  1.5f, 0,  rx, ry, rz, speed,  1, 0);
         }
 
-        // 索引数据
         int[] indices = new int[count * 6];
         int idx = 0;
         for (int i = 0; i < count; i++) {
             int offset = i * 4;
-            indices[idx++] = offset;
-            indices[idx++] = offset + 1;
-            indices[idx++] = offset + 2;
-            indices[idx++] = offset + 2;
-            indices[idx++] = offset + 3;
-            indices[idx++] = offset;
+            indices[idx++] = offset; indices[idx++] = offset + 1; indices[idx++] = offset + 2;
+            indices[idx++] = offset + 2; indices[idx++] = offset + 3; indices[idx++] = offset;
         }
 
         float[] res = new float[indices.length * 20];
-        for (int i = 0; i < indices.length; i++) {
-            System.arraycopy(v, indices[i] * 20, res, i * 20, 20);
-        }
+        for (int i = 0; i < indices.length; i++) System.arraycopy(v, indices[i] * 20, res, i * 20, 20);
         return res;
     }
 
@@ -212,10 +223,10 @@ public class Test6 {
                                  float rx, float ry, float rz, float speed,
                                  float u, float v) {
         int i = index * 20;
-        arr[i] = px; arr[i+1] = py; arr[i+2] = pz;      // aPos (用来拉伸四边形的局部偏移)
-        arr[i+3] = 0; arr[i+4] = 0; arr[i+5] = 1;       // aNormal
-        arr[i+6] = u; arr[i+7] = v;                     // aTexCoord (用于Shader内控制透明度拉丝)
-        arr[i+8] = rx; arr[i+9] = ry; arr[i+10] = rz; arr[i+11] = speed; // aColor 存放随机坐标和速度
+        arr[i] = px; arr[i+1] = py; arr[i+2] = pz;
+        arr[i+3] = 0; arr[i+4] = 0; arr[i+5] = 1;
+        arr[i+6] = u; arr[i+7] = v;
+        arr[i+8] = rx; arr[i+9] = ry; arr[i+10] = rz; arr[i+11] = speed;
     }
 
     private static void updateSplashes(float dt) {
@@ -279,7 +290,7 @@ public class Test6 {
     }
 
     private static float[] generateSkyBoxData() {
-        float[] c = {-1, 1, -1, -1, -1, -1, 1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, -1, -1, -1, -1, 1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, 1, -1, -1, 1, -1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, 1, -1, -1, -1, -1, 1, -1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, 1, -1, -1, 1, -1, 1, -1, 1, 1, -1, 1, 1, 1, 1, 1, 1, -1, 1, 1, -1, 1, -1, -1, -1, -1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, -1, 1, 1, -1, 1};
+        float[] c = {-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,-1,1,1,-1,-1,1,-1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,-1,1,1,-1,-1,1,1,-1,-1,1,-1,1,1,1,1,1,1,1,1,1,-1,1,-1,-1,-1,-1,1,-1,1,1,1,1,1,1,1,1,1,-1,1,-1,-1,1,-1,1,-1,1,1,-1,1,1,1,1,1,1,-1,1,1,-1,1,-1,-1,-1,-1,-1,-1,1,1,-1,-1,1,-1,-1,-1,-1,1,1,-1,1};
         float[] d = new float[c.length / 3 * 20];
         for (int i = 0; i < c.length / 3; i++) {
             d[i * 20] = c[i * 3]; d[i * 20 + 1] = c[i * 3 + 1]; d[i * 20 + 2] = c[i * 3 + 2];

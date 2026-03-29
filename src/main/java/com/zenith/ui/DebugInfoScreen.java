@@ -1,6 +1,7 @@
 package com.zenith.ui;
 
 import com.zenith.asset.AssetResource;
+import com.zenith.asset.Resource;
 import com.zenith.common.math.Color;
 import com.zenith.common.math.Rectf;
 import com.zenith.render.Renderer;
@@ -29,7 +30,7 @@ public class DebugInfoScreen extends UIScreen {
         this.engine = engine;
         this.gpuName = GL11.glGetString(GL11.GL_RENDERER);
         this.glVersion = GL11.glGetString(GL11.GL_VERSION).split(" ")[0];
-        AssetResource logoRes = AssetResource.loadFromResources("textures/logo.png");
+        AssetResource logoRes = Resource.getLogoResource();
         this.logoComponent = new UIImageComponent(15, 15, 100, 100, logoRes);
     }
 

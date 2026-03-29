@@ -4,10 +4,7 @@ import com.zenith.render.Camera;
 import com.zenith.render.Renderer;
 import com.zenith.render.VertexLayout;
 import com.zenith.render.Window;
-import com.zenith.render.backend.opengl.GLRenderer;
-import com.zenith.render.backend.opengl.GLCamera;
-import com.zenith.render.backend.opengl.GLWindow;
-import com.zenith.render.backend.opengl.GLMaterial;
+import com.zenith.render.backend.opengl.*;
 import com.zenith.render.backend.opengl.buffer.GLBufferBuilder;
 import com.zenith.render.backend.opengl.shader.UIShader;
 import com.zenith.ui.DebugInfoScreen;
@@ -22,7 +19,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.lwjgl.glfw.GLFW.*;
+import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL11C.glViewport;
+import static org.lwjgl.opengl.GL30C.GL_FRAMEBUFFER;
+import static org.lwjgl.opengl.GL30C.glBindFramebuffer;
 
 /**
  * 增强型引擎抽象类：支持 3D 渲染与 UI 系统
@@ -35,8 +35,6 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
 
     private boolean running;
     private float lastFrameTime;
-
-    // --- 输入状态 ---
     protected final boolean[] keys = new boolean[1024];
     protected final boolean[] mouseButtons = new boolean[8];
     private float lastMouseX = 640.0f, lastMouseY = 360.0f;
@@ -57,9 +55,8 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     private final Vector3f tempPos = new Vector3f();
     private final Vector3f tempFront = new Vector3f();
     private final Vector3f tempRight = new Vector3f();
-    private final Vector3f tempMove = new Vector3f();
     private final Vector3f worldUp = new Vector3f(0, 1, 0);
-
+    protected SceneFramebuffer sceneFBO;
     public ZenithEngine(Window window) {
         this.window = window;
         this.camera = new GLCamera();
@@ -78,6 +75,7 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
         this.debugOverlay = new DebugInfoScreen(this);
         int[] w = new int[1], h = new int[1];
         glfwGetFramebufferSize(((GLWindow)window).getHandle(), w, h);
+        sceneFBO = new SceneFramebuffer(w[0], h[0]);
         glViewport(0, 0, w[0], h[0]);
         this.camera.getProjection().updateSize(w[0], h[0]);
         running = true;
@@ -104,29 +102,53 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     }
 
     private void loop() {
+        // 主循环
         while (running && !window.shouldClose()) {
+            // 计算帧时间
             float currentTime = (float) glfwGetTime();
             float deltaTime = currentTime - lastFrameTime;
             lastFrameTime = currentTime;
 
+            // 限制最大帧间隔，防止因卡顿导致更新过大
             if (deltaTime > 0.1f) deltaTime = 0.1f;
 
+            // 更新相机输入（如果鼠标锁定）
             if (isCursorLocked) {
                 updateCameraInput(deltaTime);
             }
+
+            // 更新所有可见的 UI 屏幕
             for (UIScreen screen : screens) {
                 if (screen.isVisible()) {
                     screen.update(deltaTime);
                 }
             }
+
+            // 更新游戏/场景逻辑
             update(deltaTime);
 
+            // 更新视图投影矩阵和裁剪体
             viewProjMatrix.set(camera.getProjection().getMatrix()).mul(camera.getViewMatrix());
             frustumIntersection.set(viewProjMatrix);
 
-            render();
-            renderUI(deltaTime);
+            // 渲染到场景 FBO
+            sceneFBO.bind();
+            glViewport(0, 0, window.getWidth(), window.getHeight());
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+            renderScene();
+            sceneFBO.copyToHistory();
+            sceneFBO.bind();
+            renderAfterOpaqueScene();
+
+            sceneFBO.unbind();
+
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, window.getWidth(), window.getHeight());
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+            sceneFBO.renderToScreen();
+            renderUI(deltaTime);
             window.update();
         }
         cleanup();
@@ -137,33 +159,21 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
      */
     private void updateCameraInput(float deltaTime) {
         Vector3f pos = camera.getTransform().getPosition();
-
-        // 1. 计算当前移动速度（左Ctrl加速）
         float currentSpeed = (keys[GLFW_KEY_LEFT_CONTROL] || keys[GLFW_KEY_RIGHT_CONTROL])
                 ? cameraSpeed * sprintMultiplier : cameraSpeed;
         float moveStep = currentSpeed * deltaTime;
-
-        // 2. 根据当前的 Yaw 和 Pitch 计算相机的正前方向量 (Front)
         tempFront.set(
                 (float) (Math.cos(Math.toRadians(cameraYaw)) * Math.cos(Math.toRadians(cameraPitch))),
                 (float) Math.sin(Math.toRadians(cameraPitch)),
                 (float) (Math.sin(Math.toRadians(cameraYaw)) * Math.cos(Math.toRadians(cameraPitch)))
         ).normalize();
-
-        // 3. 计算相机的右侧向量 (Right = Front x WorldUp)
         tempFront.cross(worldUp, tempRight).normalize();
-
-        // 4. 根据按键更新位置
         if (keys[GLFW_KEY_W]) pos.add(new Vector3f(tempFront).mul(moveStep));
         if (keys[GLFW_KEY_S]) pos.sub(new Vector3f(tempFront).mul(moveStep));
         if (keys[GLFW_KEY_A]) pos.sub(new Vector3f(tempRight).mul(moveStep));
         if (keys[GLFW_KEY_D]) pos.add(new Vector3f(tempRight).mul(moveStep));
-
-        // 垂直移动 (空格上升，左Shift下降)
         if (keys[GLFW_KEY_SPACE]) pos.y += moveStep;
         if (keys[GLFW_KEY_LEFT_SHIFT]) pos.y -= moveStep;
-
-        // 5. 更新相机的 LookAt 矩阵
         tempPos.set(pos).add(tempFront);
         camera.lookAt(tempPos, worldUp);
     }
@@ -278,7 +288,8 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     public Camera getCamera() { return camera; }
 
     protected abstract void update(float deltaTime);
-    protected abstract void render();
+    protected abstract void renderScene();
+    protected abstract void renderAfterOpaqueScene();
 
     private void cleanup() {
         if (uiContext != null) uiContext.dispose();
