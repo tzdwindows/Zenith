@@ -138,7 +138,7 @@ public class GLShader extends Shader {
     private int getUniformLocation(String name) {
         int location = checkUniformLocation(name);
         if (location == -1) {
-            InternalLogger.warn(String.format("Uniform '%s' not found or unused in shader [%s]", name, this.name));
+            //InternalLogger.warn(String.format("Uniform '%s' not found or unused in shader [%s]", name, this.name));
         }
         return location;
     }

@@ -26,22 +26,17 @@ public class Test extends ZenithEngine {
     private WaterEntity waterEntity;
     private GLMesh skyBoxMesh;
     private GLMesh terrainMesh;
-
     private SkyShader skyShader;
     private WaterShader waterShader;
     private TerrainShader terrainShader;
-
     private float time = 0.0f;
     private boolean sceneInitialized = false;
-
     private final Matrix4f viewMatrix = new Matrix4f();
     private final Matrix4f projMatrix = new Matrix4f();
-
     private final Vector3f sunDir = new Vector3f();
     private final Vector3f sunIntensityVec = new Vector3f();
     private final Vector3f camPosCached = new Vector3f();
     private final TerrainShader.TerrainMaterialParams terrainParams = new TerrainShader.TerrainMaterialParams();
-    private final Matrix4f tempMat = new Matrix4f();
 
     GLTexture grassAlbedo;
     GLTexture grassNormal;
@@ -81,7 +76,7 @@ public class Test extends ZenithEngine {
         terrainParams.uvScale = 8.0f;
         terrainParams.amplitude = 85.0f;
         terrainParams.frequency = 0.0025f;
-        terrainParams.snowHeight = 50.0f;
+        terrainParams.snowHeight = 100.0f;
 
         terrainShader.setMaterial(terrainParams);
 
@@ -139,7 +134,7 @@ public class Test extends ZenithEngine {
         float blend = (float) Math.pow(sunY, 0.4);
         sunIntensityVec.set(sunsetColor).lerp(noonColor, blend);
 
-        float intensity = Math.max(0.15f, sunY * 3.5f);
+        float intensity = Math.max(0.2f, sunY * 1.2f);
         sunIntensityVec.mul(intensity);
     }
 

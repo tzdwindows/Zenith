@@ -1,8 +1,8 @@
 #ifndef SURFACE_SHADING_GLSL
 #define SURFACE_SHADING_GLSL
 
-#include "filament/common_math.glsl"
-#include "filament/brdf.glsl"
+#include "common_math.glsl"
+#include "brdf.glsl"
 
 vec3 isotropicLobe(PBRParams pixel, vec3 n, vec3 v, vec3 l, vec3 h) {
     float NoH = saturate(dot(n, h));
