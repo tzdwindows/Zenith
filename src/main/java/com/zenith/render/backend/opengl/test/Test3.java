@@ -29,8 +29,6 @@ public class Test3 {
     private static boolean isMiddleMouseDown = false;
     private static float distance = 10.0f;
     private static Vector3f target = new Vector3f(0, 0, 0);
-
-    // 用于计算 Delta Time
     private static double lastFrameTime = 0.0;
 
     public static void main(String[] args) throws Exception {
@@ -69,7 +67,7 @@ public class Test3 {
             @Override
             public void onScroll(double xoffset, double yoffset) {
                 distance -= (float) yoffset * 1.5f;
-                distance = Math.max(0.01f, Math.min(500.0f, distance));
+                distance = Math.max(0.001f, Math.min(500.0f, distance));
             }
 
             @Override public void onKey(int key, int scancode, int action, int mods) {}
@@ -100,9 +98,9 @@ public class Test3 {
             model.playAnimation(animName);
         }
 
-        GLLight sunLight = new GLLight(new Vector3f(10, 20, 10), Color.WHITE, 1.0f);
+        GLLight sunLight = new GLLight(new Vector3f(10, 20, 10), Color.WHITE, 0.5f);
         Transform modelTransform = new Transform();
-        modelTransform.setScale(0.01f);
+        //modelTransform.setScale(0.01f);
 
         lastFrameTime = glfwGetTime();
 
