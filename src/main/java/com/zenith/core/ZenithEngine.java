@@ -28,7 +28,6 @@ import static org.lwjgl.opengl.GL30C.glBindFramebuffer;
  * 增强型引擎抽象类：支持 3D 渲染与 UI 系统
  */
 public abstract class ZenithEngine implements Window.WindowEventListener {
-
     protected final Window window;
     protected Renderer renderer;
     protected final GLCamera camera;

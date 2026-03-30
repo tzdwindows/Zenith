@@ -1,7 +1,6 @@
 package com.zenith.render;
 
 import com.zenith.common.math.Color;
-import com.zenith.common.math.Vector4f;
 import com.zenith.common.utils.InternalLogger;
 
 /**
@@ -16,7 +15,6 @@ public abstract class RenderContext {
     protected Mesh currentMesh;
     protected boolean depthTestEnabled = false;
     protected boolean blendingEnabled = false;
-    protected Vector4f viewport = new Vector4f();
 
     protected RenderContext() {
         InternalLogger.info("Initializing RenderContext state cache...");

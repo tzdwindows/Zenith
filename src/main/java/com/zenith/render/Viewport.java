@@ -1,7 +1,7 @@
 package com.zenith.render;
 
-import com.zenith.common.math.Vector2f;
 import com.zenith.common.utils.InternalLogger;
+import org.joml.Vector2f;
 
 /**
  * Viewport 定义了渲染在屏幕上的区域。

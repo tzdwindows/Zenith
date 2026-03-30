@@ -53,6 +53,11 @@ dependencies {
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    implementation 'org.graalvm.js:js:23.0.1'
+    implementation 'org.graalvm.js:js-scriptengine:23.0.1'
+
+    implementation 'io.github.classgraph:classgraph:4.8.165'
 }
 
 test {
