@@ -29,6 +29,11 @@ public class ScriptLauncher extends ZenithEngine {
         this.jsRenderAfterOpaque = scriptManager.getGlobal("renderAfterOpaqueScene");
     }
 
+    @Override
+    protected void init() {
+
+    }
+
     /**
      * 实现父类抽象方法：逻辑更新
      */

@@ -111,6 +111,11 @@ public class Test extends ZenithEngine {
     }
 
     @Override
+    protected void init() {
+
+    }
+
+    @Override
     protected void update(float deltaTime) {
         if (!sceneInitialized) initScene();
 

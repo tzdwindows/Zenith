@@ -86,7 +86,7 @@ public class Test3 {
         GLModel model = new GLModel("MyGLTFModel", shader);
         try (InputStream is = new FileInputStream("E:\\3d\\document_file_folder\\scene.gltf")) {
             AssetIdentifier id = new AssetIdentifier("engine", "models/scene.gltf");
-            AssetResource resource = new AssetResource("GltfModel", id, is, null);
+            AssetResource resource = new AssetResource("GltfModel", id, is, null,0);
             model.load(resource);
         }
 

@@ -241,7 +241,7 @@ public class GLModel extends Model {
                 if (textureFile.exists()) {
                     try (FileInputStream fis = new FileInputStream(textureFile)) {
                         AssetResource res = new AssetResource(textureName,
-                                new AssetIdentifier("model", textureName), fis, null);
+                                new AssetIdentifier("model", textureName), fis, null,0);
                         GLTexture tex = new GLTexture(res);
                         material.setTexture("u_Texture", tex);
                     } catch (Exception e) {

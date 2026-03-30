@@ -128,6 +128,6 @@ public class Test2 {
         String path = "/" + id.getPath();
         InputStream is = Test2.class.getResourceAsStream(path);
         if (is == null) return null;
-        return new AssetResource("Resources", id, is, null);
+        return new AssetResource("Resources", id, is, null,0);
     }
 }

@@ -31,7 +31,6 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     protected final Window window;
     protected Renderer renderer;
     protected final GLCamera camera;
-
     private boolean running;
     private float lastFrameTime;
     protected final boolean[] keys = new boolean[1024];
@@ -50,7 +49,6 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     protected float cameraSpeed = 20.0f;
     protected float sprintMultiplier = 4.0f;
     protected float mouseSensitivity = 0.12f;
-
     private final Vector3f tempPos = new Vector3f();
     private final Vector3f tempFront = new Vector3f();
     private final Vector3f tempRight = new Vector3f();
@@ -79,6 +77,7 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
         this.camera.getProjection().updateSize(w[0], h[0]);
         running = true;
         lastFrameTime = (float) glfwGetTime();
+        init();
         loop();
     }
 
@@ -280,6 +279,7 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     public Renderer getRenderer() { return renderer; }
     public Camera getCamera() { return camera; }
 
+    protected abstract void init();
     protected abstract void update(float deltaTime);
     protected abstract void renderScene();
     protected abstract void renderAfterOpaqueScene();
