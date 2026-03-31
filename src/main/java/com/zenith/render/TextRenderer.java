@@ -1,6 +1,7 @@
 package com.zenith.render;
 
 import com.zenith.common.math.Color;
+import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
@@ -36,6 +37,8 @@ public abstract class TextRenderer {
      * 开启文字渲染批处理（在 RenderLoop 中调用）
      */
     public abstract void begin();
+
+    public abstract void drawString(String text, float x, float y, float scaleX, float scaleY, Font font, Color color, Matrix4f model);
 
     /**
      * 提交所有待绘制的文字到 GPU

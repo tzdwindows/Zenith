@@ -20,6 +20,8 @@ public class GLTextRenderer extends TextRenderer {
     private final Shader textShader;
     private final VertexLayout layout;
     private Font currentFont = null;
+    private float currentScaleX = 1.0f;
+    private float currentScaleY = 1.0f;
     private boolean isBuilding = false;
 
     public GLTextRenderer(Shader shader) {
@@ -146,47 +148,59 @@ public class GLTextRenderer extends TextRenderer {
 
     @Override
     public void drawString(String text, float x, float y, Font font, Color color) {
-        if (!isBuilding || (currentFont != null && currentFont != font)) {
+        drawString(text, x, y, 1.0f, 1.0f, font, color, new Matrix4f());
+    }
+
+    @Override
+    public void drawString(String text, float x, float y, float scaleX, float scaleY, Font font, Color color, Matrix4f model) {
+        if (!isBuilding || (currentFont != font) || currentScaleX != scaleX || currentScaleY != scaleY) {
             flush();
             isBuilding = true;
             builder.begin(layout);
+            this.currentFont = font;
+            this.currentScaleX = scaleX;
+            this.currentScaleY = scaleY;
+            font.setScale(scaleX, scaleY);
         }
-
+        this.currentFont = font;
         float savedLightCount = 0.0f;
         boolean hasLightCount = textShader.hasUniform("u_LightCount");
         if (hasLightCount) {
             savedLightCount = textShader.getUniformFloat("u_LightCount");
             textShader.setUniform("u_LightCount", 0.0f);
         }
-
-        this.currentFont = font;
         if (textShader.hasUniform("u_Model")) {
-            textShader.setUniform("u_Model", new Matrix4f());
+            textShader.setUniform("u_Model", new Matrix4f()); // UI 通常在顶点中计算位置
         }
 
-        fillBuffer(text, x, y, font, color);
+        // 调用带缩放的填充逻辑
+        fillBuffer(text, x, y, scaleX, scaleY, font, color, model);
+
         if (hasLightCount) {
             textShader.setUniform("u_LightCount", savedLightCount);
         }
     }
 
-    private void fillBuffer(String text, float x, float y, Font font, Color color) {
+    private void fillBuffer(String text, float x, float y, float scaleX, float scaleY, Font font, Color color, Matrix4f model) {
         float curX = x;
         for (char c : text.toCharArray()) {
             Font.Glyph g = font.getGlyph(c);
             if (g == null) continue;
-            float x1 = curX + g.offsetX;
-            float y1 = y + g.offsetY;
-            float x2 = x1 + g.width;
-            float y2 = y1 + g.height;
 
-            putVertex2D(x1, y2, g.u,  g.v2, color);
-            putVertex2D(x2, y2, g.u2, g.v2, color);
-            putVertex2D(x2, y1, g.u2, g.v,  color);
-            putVertex2D(x1, y2, g.u,  g.v2, color);
-            putVertex2D(x2, y1, g.u2, g.v,  color);
-            putVertex2D(x1, y1, g.u,  g.v,  color);
-            curX += g.advance;
+            float x1 = curX + g.offsetX * scaleX;
+            float y1 = y + g.offsetY * scaleY;
+            float x2 = x1 + g.width * scaleX;
+            float y2 = y1 + g.height * scaleY;
+
+            // 使用 putVertex 经过 Matrix4f 变换（保持与 3D 渲染逻辑一致的精确性）
+            putVertex(model, x1, y2, g.u,  g.v2, color);
+            putVertex(model, x2, y2, g.u2, g.v2, color);
+            putVertex(model, x2, y1, g.u2, g.v,  color);
+            putVertex(model, x1, y2, g.u,  g.v2, color);
+            putVertex(model, x2, y1, g.u2, g.v,  color);
+            putVertex(model, x1, y1, g.u,  g.v,  color);
+
+            curX += g.advance * scaleX;
         }
     }
 
@@ -209,7 +223,6 @@ public class GLTextRenderer extends TextRenderer {
             float x2 = x1 + g.width;
             float y2 = y1 - g.height;
 
-            // CCW 绕序
             putVertex(model, x1, y2, g.u,  g.v2, color);
             putVertex(model, x2, y2, g.u2, g.v2, color);
             putVertex(model, x2, y1, g.u2, g.v,  color);

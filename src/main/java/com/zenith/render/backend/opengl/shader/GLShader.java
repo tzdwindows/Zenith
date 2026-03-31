@@ -1,6 +1,5 @@
 package com.zenith.render.backend.opengl.shader;
 
-import com.zenith.asset.AssetIdentifier;
 import com.zenith.asset.AssetResource;
 import com.zenith.common.math.Color;
 import com.zenith.common.utils.InternalLogger;

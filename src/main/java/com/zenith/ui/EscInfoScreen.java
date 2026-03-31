@@ -35,7 +35,9 @@ public class EscInfoScreen extends UIScreen {
             TextureAtlas uiAtlas = new TextureAtlas(buttonTexture, xmlRes);
             addComponent(new UIButton(0, 0, btnWidth, btnHeight, uiAtlas, "stop.png")
                     .setLabel("RESUME")
+                    .setBgExpand(75f, 15f)
                     .setTooltip("Resume gameplay")
+                    .setBorderEnabled(false)
                     .setColors(Color.WHITE, new Color(0.8f, 0.8f, 0.8f, 1f), Color.GREEN)
                     .setOnClick(() -> {
                         this.setVisible(false);
@@ -43,6 +45,8 @@ public class EscInfoScreen extends UIScreen {
                     }));
             addComponent(new UIButton(0, 0, btnWidth, btnHeight, uiAtlas, "stop.png")
                     .setLabel("QUIT")
+                    .setBgExpand(75f, 15f)
+                    .setBorderEnabled(false)
                     .setTooltip("Exit to Desktop")
                     .setColors(Color.WHITE, new Color(0.8f, 0.8f, 0.8f, 1f), new Color(1f, 0.3f, 0.3f, 1f))
                     .setOnClick(() -> {

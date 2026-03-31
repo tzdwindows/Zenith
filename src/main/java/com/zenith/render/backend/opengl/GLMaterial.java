@@ -20,7 +20,7 @@ public class GLMaterial extends Material {
     public GLMaterial(Shader shader) {
         super(shader);
         try {
-            font = new GLFont(Resource.getFontResource(), 32);
+            font = new GLFont(Resource.getFontResource(), 16);
             textRenderer = new GLTextRenderer(GLShaderRegistry.get(GLShaderRegistry.UI_TEXT));
         } catch (IOException e) {
             throw new RuntimeException(e);

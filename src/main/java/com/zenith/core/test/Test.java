@@ -28,14 +28,15 @@ public class Test extends ZenithEngine {
     private WaterShader waterShader;
     private TerrainShader terrainShader;
     private float time = 0.0f;
-    private boolean sceneInitialized = false;
     private final Matrix4f viewMatrix = new Matrix4f();
     private final Matrix4f projMatrix = new Matrix4f();
     private final Vector3f sunDir = new Vector3f();
     private final Vector3f sunIntensityVec = new Vector3f();
     private final Vector3f camPosCached = new Vector3f();
     private final TerrainShader.TerrainMaterialParams terrainParams = new TerrainShader.TerrainMaterialParams();
-
+    private float[] skyBoxRawData;
+    private float[] terrainRawData;
+    private float[] waterRawData;
     GLTexture grassAlbedo;
     GLTexture grassNormal;
     GLTexture grassRoughness;
@@ -49,6 +50,7 @@ public class Test extends ZenithEngine {
     public Test() {
         super(new GLWindow("Zenith World System - Terrain & Water", 1280, 720));
     }
+
 
     private void initScene() {
         // 相机位置
@@ -106,13 +108,101 @@ public class Test extends ZenithEngine {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-
-        this.sceneInitialized = true;
     }
 
     @Override
     protected void init() {
+        this.getCamera().getTransform().getPosition().set(0, 80, 100);
+        glEnable(GL_DEPTH_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        VertexLayout layout = createStandardLayout();
+        skyShader = GLShaderRegistry.get(GLShaderRegistry.SKY);
+        skyBoxMesh = new GLMesh(skyBoxRawData.length / 20, layout);
+        skyBoxMesh.updateVertices(skyBoxRawData);
+        terrainShader = new TerrainShader();
+        terrainParams.hasGrassMap = true;
+        terrainParams.hasRockMap = true;
+        terrainParams.hasNormalMap = true;
+        terrainParams.uvScale = 85.0f;
+        terrainParams.amplitude = 120.0f;
+        terrainParams.frequency = 0.0018f;
+        terrainParams.snowHeight = 75.0f;
+        terrainShader.setMaterial(terrainParams);
+        terrainMesh = new GLMesh(terrainRawData.length / 20, layout);
+        terrainMesh.updateVertices(terrainRawData);
+        waterShader = new WaterShader();
+        GLMaterial waterMaterial = new GLMaterial(waterShader);
+        GLMesh waterMesh = new GLMesh(waterRawData.length / 20, layout);
+        waterMesh.updateVertices(waterRawData);
+        this.waterEntity = new WaterEntity(waterMesh, waterMaterial);
+    }
+    @Override
+    protected void asyncLoad() {
+        setLoadingProgress(0.1f);
+        skyBoxRawData = generateSkyBoxData();
 
+        setLoadingProgress(0.2f);
+        terrainRawData = generatePlaneData(3000.0f, 3000.0f, 250, 250);
+
+        setLoadingProgress(0.4f);
+        waterRawData = generatePlaneData(3000.0f, 3000.0f, 300, 300);
+
+        // ==========================================
+        // 核心修改：分离 IO/CPU 解码 与 GPU 上传
+        // ==========================================
+
+        loadTextureSafe(0.50f, "textures/grass/Grass004_4K-PNG_Color.png",      tex -> grassAlbedo = tex);
+        loadTextureSafe(0.55f, "textures/grass/Grass004_4K-PNG_NormalGL.png",   tex -> grassNormal = tex);
+        loadTextureSafe(0.60f, "textures/grass/Grass004_4K-PNG_Roughness.png",tex -> grassRoughness = tex);
+
+        loadTextureSafe(0.70f, "textures/rock/Rock051_1K-PNG_Color.png",        tex -> rockAlbedo = tex);
+        loadTextureSafe(0.80f, "textures/rock/Rock051_1K-PNG_NormalGL.png",     tex -> rockNormal = tex);
+        loadTextureSafe(0.90f, "textures/rock/Rock051_1K-PNG_Roughness.png",  tex -> rockRoughness = tex);
+
+        loadTextureSafe(0.95f, "textures/water/Water_0341.jpg",                 tex -> waterAlbedo = tex);
+        loadTextureSafe(1.00f, "textures/water/Water_0341normal.jpg",           tex -> waterNormal = tex);
+
+        try {
+            // 给最后一点缓冲时间，确保进度条能平滑走到 100%
+            Thread.sleep(300);
+        } catch (InterruptedException ignored) {}
+    }
+
+
+    /**
+     * 高级安全加载法：彻底防止主线程卡顿
+     */
+    private void loadTextureSafe(float progress, String path, java.util.function.Consumer<GLTexture> onLoaded) {
+        try {
+            var rawImageData = AssetResource.loadFromResources(path);
+            runOnMainThread(() -> {
+                GLTexture texture = null;
+                try {
+                    texture = new GLTexture(rawImageData);
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+                onLoaded.accept(texture);
+            });
+            setLoadingProgress(progress);
+        } catch (Exception e) {
+            System.err.println("加载贴图失败: " + path);
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * 辅助方法：统一处理加载异常
+     */
+    private GLTexture createTexture(String path) {
+        try {
+            return new GLTexture(AssetResource.loadFromResources(path));
+        } catch (IOException e) {
+            System.err.println("加载贴图失败: " + path);
+            e.printStackTrace();
+            return null;
+        }
     }
 
     @Override
@@ -122,7 +212,6 @@ public class Test extends ZenithEngine {
 
     @Override
     protected void update(float deltaTime) {
-        if (!sceneInitialized) initScene();
 
         // 让水流动更明显
         time += deltaTime * 1.2f;

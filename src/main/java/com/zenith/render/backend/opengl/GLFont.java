@@ -4,7 +4,6 @@ import com.zenith.asset.AssetResource;
 import com.zenith.render.Font;
 import com.zenith.render.Texture;
 import com.zenith.render.backend.opengl.texture.GLTexture;
-import org.lwjgl.BufferUtils;
 import org.lwjgl.stb.STBTTFontinfo;
 import org.lwjgl.stb.STBTruetype;
 import org.lwjgl.system.MemoryStack;
@@ -25,48 +24,89 @@ import static org.lwjgl.opengl.GL12.GL_CLAMP_TO_EDGE;
 import static org.lwjgl.opengl.GL33.GL_TEXTURE_SWIZZLE_RGBA;
 
 public class GLFont extends Font {
-
     private final Map<Character, Glyph> glyphs = new HashMap<>();
     private GLTexture texture;
     private float scale;
+    private final ByteBuffer ttfData;
+    private final String debugPath;
 
-    // 初始测试建议使用 1024，稳定后再改 2048
-    private static final int ATLAS_SIZE = 1024;
-    private static final int PADDING = 2; // 增加间距防止采样污染
-
+    private static final int ATLAS_SIZE = 2048;
+    private static final int PADDING = 2;
+    private final Glyph tempGlyph = new Glyph();
     public GLFont(AssetResource resource, int fontSize) throws IOException {
         this(loadResourceToDirectBuffer(resource), resource.getLocation().getPath(), fontSize);
         resource.close();
+    }
+
+    private GLFont(ByteBuffer ttfData, String debugPath, int fontSize, Map<Character, Glyph> glyphs, GLTexture texture) {
+        super(debugPath, fontSize);
+        this.ttfData = ttfData; // 注意：如果是堆外内存，需考虑引用计数，否则 dispose 会出问题
+        this.debugPath = debugPath;
+        this.glyphs.putAll(glyphs);
+        this.texture = texture;
     }
 
     public GLFont(String path, int fontSize) throws IOException {
         this(loadPathToDirectBuffer(path), path, fontSize);
     }
 
+    @Override
+    public Font copy() {
+        GLFont newFont = new GLFont(this.ttfData, this.fontName, this.fontSize, this.glyphs, this.texture);
+        this.copyStateTo(newFont);
+        return newFont;
+    }
+
     private GLFont(ByteBuffer ttfData, String debugPath, int fontSize) throws IOException {
         super(debugPath, fontSize);
+        this.ttfData = ttfData;
+        this.debugPath = debugPath;
+
+        // 执行初始构建
+        rebuild(fontSize);
+    }
+
+    /**
+     * 实现字号动态修改
+     * 注意：由于涉及位图重绘和纹理上传，不建议在每帧执行
+     */
+    @Override
+    public void setFontSize(int fontSize) {
+        if (this.fontSize == fontSize) return;
+        try {
+            this.fontSize = fontSize;
+            rebuild(fontSize);
+        } catch (IOException e) {
+            System.err.println("Failed to rebuild font atlas for size: " + fontSize);
+            e.printStackTrace();
+        }
+    }
+
+    private void rebuild(int fontSize) throws IOException {
+        // 1. 清理旧纹理和旧数据
+        if (this.texture != null) {
+            this.texture.dispose();
+        }
+        glyphs.clear();
+
+        // 2. 初始化 STB 字体信息
+        STBTTFontinfo info = STBTTFontinfo.create();
+        if (!STBTruetype.stbtt_InitFont(info, ttfData)) {
+            throw new IOException("STB failed to init font during rebuild: " + debugPath);
+        }
+
+        // 3. 计算新缩放
+        this.scale = STBTruetype.stbtt_ScaleForPixelHeight(info, fontSize);
+
+        // 4. 分配并清空临时图集内存
+        ByteBuffer atlasBitmap = MemoryUtil.memAlloc(ATLAS_SIZE * ATLAS_SIZE);
+        MemoryUtil.memSet(atlasBitmap, 0);
 
         try {
-            STBTTFontinfo info = STBTTFontinfo.create();
-            if (!STBTruetype.stbtt_InitFont(info, ttfData)) {
-                throw new IOException("STB failed to init font: " + debugPath);
-            }
-
-            this.scale = STBTruetype.stbtt_ScaleForPixelHeight(info, fontSize);
-
-            // 分配并手动清零
-            ByteBuffer atlasBitmap = MemoryUtil.memAlloc(ATLAS_SIZE * ATLAS_SIZE);
-            MemoryUtil.memSet(atlasBitmap, 0);
-
-            try {
-                bakeAtlas(info, atlasBitmap);
-                setupTexture(atlasBitmap);
-            } finally {
-                MemoryUtil.memFree(atlasBitmap);
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-            throw new IOException("Critical error during font loading: " + e.getMessage());
+            bakeAtlas(info, atlasBitmap);
+            setupTexture(atlasBitmap);
+        } finally {
+            MemoryUtil.memFree(atlasBitmap);
         }
     }
 
@@ -75,7 +115,6 @@ public class GLFont extends Font {
         int curY = PADDING;
         int maxRowHeight = 0;
 
-        // 【重改】大幅缩减初始范围，先确保能跑通
         String charset = generateTestCharset();
 
         for (int i = 0; i < charset.length(); i++) {
@@ -88,31 +127,26 @@ public class GLFont extends Font {
                 IntBuffer oy = stack.mallocInt(1);
                 IntBuffer adv = stack.mallocInt(1);
 
-                // 获取位图
                 ByteBuffer charPixels = STBTruetype.stbtt_GetCodepointBitmap(info, scale, scale, c, w, h, ox, oy);
                 STBTruetype.stbtt_GetCodepointHMetrics(info, c, adv, null);
 
                 int charW = w.get(0);
                 int charH = h.get(0);
 
-                // 换行逻辑
                 if (curX + charW + PADDING >= ATLAS_SIZE) {
                     curX = PADDING;
                     curY += maxRowHeight + PADDING;
                     maxRowHeight = 0;
                 }
 
-                // 溢出检查
                 if (curY + charH + PADDING >= ATLAS_SIZE) {
                     break;
                 }
 
                 if (charPixels != null) {
-                    // 安全拷贝：逐行 put，并在每行结束后重置 position
                     for (int row = 0; row < charH; row++) {
                         int atlasPos = (curY + row) * ATLAS_SIZE + curX;
                         atlasBitmap.position(atlasPos);
-
                         for (int col = 0; col < charW; col++) {
                             atlasBitmap.put(charPixels.get(row * charW + col));
                         }
@@ -142,11 +176,9 @@ public class GLFont extends Font {
 
     private String generateTestCharset() {
         StringBuilder sb = new StringBuilder();
-        // 仅 ASCII + 常用标点 + 少量中文
         for (char c = 32; c < 127; c++) sb.append(c);
         sb.append("，。！？ZenithEngine渲染测试提示");
-
-        // 只加 500 个常用汉字测试稳定性
+        // 常用中文字符范围
         for (int i = 0x4E00; i <= 0x4FFF; i++) {
             sb.append((char) i);
         }
@@ -158,7 +190,8 @@ public class GLFont extends Font {
         this.texture = new GLTexture(ATLAS_SIZE, ATLAS_SIZE, atlasBitmap, GL_RED);
 
         this.texture.bind(0);
-        int[] swizzle = {GL_RED, GL_RED, GL_RED, GL_RED};
+        // 使用 Swizzle 将单通道 R 映射到 RGBA，让文字通过 Alpha 通道显示
+        int[] swizzle = {GL_ONE, GL_ONE, GL_ONE, GL_RED};
         glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, swizzle);
 
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -167,7 +200,6 @@ public class GLFont extends Font {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
 
-    // 辅助加载方法（保持不变）
     private static ByteBuffer loadResourceToDirectBuffer(AssetResource resource) throws IOException {
         try (InputStream is = resource.getInputStream();
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
@@ -189,15 +221,47 @@ public class GLFont extends Font {
     }
 
     @Override public Texture getTexture() { return texture; }
-    @Override public Glyph getGlyph(char c) { return glyphs.getOrDefault(c, glyphs.get(' ')); }
-    @Override public float getWidth(String text) {
-        float w = 0;
-        if(text == null) return 0;
-        for (char c : text.toCharArray()) {
-            Glyph g = getGlyph(c);
-            if (g != null) w += g.advance;
-        }
-        return w;
+    @Override
+    public Glyph getGlyph(char c) {
+        Glyph base = glyphs.getOrDefault(c, glyphs.get(' '));
+        if (base == null) return null;
+
+        // 将原始数据拷贝到临时对象并应用当前 Font 类的 scaleX/scaleY
+        tempGlyph.u = base.u;
+        tempGlyph.v = base.v;
+        tempGlyph.u2 = base.u2;
+        tempGlyph.v2 = base.v2;
+
+        // 应用动态缩放
+        tempGlyph.width = base.width * this.scaleX;
+        tempGlyph.height = base.height * this.scaleY;
+        tempGlyph.offsetX = base.offsetX * this.scaleX;
+        tempGlyph.offsetY = base.offsetY * this.scaleY;
+        tempGlyph.advance = base.advance * this.scaleX;
+
+        return tempGlyph;
     }
-    @Override public void dispose() { if (texture != null) texture.dispose(); }
+
+    @Override
+    public float getWidth(String text) {
+        float totalWidth = 0;
+        if (text == null) return 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            Glyph g = glyphs.get(c);
+            if (g == null) g = glyphs.get(' ');
+
+            if (g != null) {
+                // 这里直接使用原始 advance 乘以当前缩放
+                totalWidth += g.advance * this.scaleX;
+            }
+        }
+        return totalWidth;
+    }
+
+    @Override
+    public void dispose() {
+        if (texture != null) texture.dispose();
+        if (ttfData != null) MemoryUtil.memFree(ttfData); // 必须释放堆外内存
+    }
 }

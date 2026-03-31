@@ -87,10 +87,16 @@ public class UIRenderContext {
     }
 
     /**
-     * 在 UI 空间渲染文字
-     * 自动处理材质切换与矩阵变换同步
+     * 在 UI 空间渲染文字 (兼容旧版)
      */
     public void drawText(String text, float x, float y, Color color) {
+        drawText(text, x, y, 1.0f, 1.0f, color);
+    }
+
+    /**
+     * 在 UI 空间渲染文字 (支持缩放)
+     */
+    public void drawText(String text, float x, float y, float scaleX, float scaleY, Color color) {
         if (text == null || text.isEmpty()) return;
         com.zenith.render.Font font = getFont();
         com.zenith.render.TextRenderer textRenderer = getTextRenderer();
@@ -104,7 +110,6 @@ public class UIRenderContext {
         } else {
             shader = uiMaterial.getShader();
         }
-
         if (shader instanceof com.zenith.render.backend.opengl.shader.UITextShader textShader) {
             textShader.bind();
             textShader.setUniform("u_Projection", projectionMatrix);
@@ -116,12 +121,11 @@ public class UIRenderContext {
         org.lwjgl.opengl.GL11.glBlendFunc(org.lwjgl.opengl.GL11.GL_SRC_ALPHA, org.lwjgl.opengl.GL11.GL_ONE_MINUS_SRC_ALPHA);
         org.lwjgl.opengl.GL11.glDisable(org.lwjgl.opengl.GL11.GL_DEPTH_TEST);
         Matrix4f model = matrixStack.peek();
-        org.joml.Vector3f pos = model.transformPosition(new org.joml.Vector3f(x, y, 0), new org.joml.Vector3f());
         textRenderer.begin();
         if (font.getTexture() != null) {
             font.getTexture().bind(0);
         }
-        textRenderer.drawString(text, pos.x, pos.y, font, color);
+        textRenderer.drawString(text, x, y, scaleX, scaleY, font, color, model);
         textRenderer.end();
         if (!bufferBuilder.isBuilding()) {
             bufferBuilder.begin(uiLayout);
@@ -220,7 +224,6 @@ public class UIRenderContext {
         Vector3f v3 = modelMatrix.transformPosition(new Vector3f(x2, y2, 0), new Vector3f());
         Vector3f v4 = modelMatrix.transformPosition(new Vector3f(x2, y1, 0), new Vector3f());
 
-        // UV 设置为 0~1，配合白色纹理
         emitVertex(v1, 0, 0, color);
         emitVertex(v2, 0, 1, color);
         emitVertex(v3, 1, 1, color);
@@ -310,7 +313,6 @@ public class UIRenderContext {
     public void dispose() {
         if (uiMesh != null) uiMesh.dispose();
     }
-
     public Font getFont() {
         return uiMaterial.getFont();
     }
@@ -368,4 +370,19 @@ public class UIRenderContext {
 
     public float getScreenWidth() { return screenWidth; }
     public float getScreenHeight() { return screenHeight; }
+
+    public void drawRectOutline(float x, float y, float w, float h, float thickness, Color color) {
+
+        // 上
+        drawRect(new Rectf(x, y, w, thickness), color);
+
+        // 下
+        drawRect(new Rectf(x, y + h - thickness, w, thickness), color);
+
+        // 左
+        drawRect(new Rectf(x, y, thickness, h), color);
+
+        // 右
+        drawRect(new Rectf(x + w - thickness, y, thickness, h), color);
+    }
 }
