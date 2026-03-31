@@ -124,7 +124,7 @@ public class SceneFramebuffer {
      * 渲染场景到屏幕
      */
     public void renderToScreen() {
-        ensureResources();
+
 
         glDisable(GL_DEPTH_TEST);
 
@@ -147,7 +147,7 @@ public class SceneFramebuffer {
     /**
      * 确保资源已创建
      */
-    private void ensureResources() {
+    public void ensureResources() {
         if (screenShader == null) screenShader = new ScreenShader();
         if (quadVao == 0) createQuad();
     }

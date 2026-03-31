@@ -145,7 +145,8 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
             sceneFBO.unbind();
             glViewport(0, 0, window.getWidth(), window.getHeight());
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            onBufferToScreen(sceneFBO.getScreenShader());
+            sceneFBO.ensureResources();
+            onBufferToScreen(logicDeltaTime,sceneFBO.getScreenShader());
             sceneFBO.renderToScreen();
             renderUI(realDeltaTime);
             window.update();
@@ -330,7 +331,7 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
      * 当缓冲区内容即将显示在屏幕中时被调用，可以用于制作屏幕特效
      * @param screenShader 缓冲区渲染状态
      */
-    protected void onBufferToScreen(ScreenShader screenShader){
+    protected void onBufferToScreen(float realDeltaTime,ScreenShader screenShader){
 
     }
     protected abstract void renderScene();

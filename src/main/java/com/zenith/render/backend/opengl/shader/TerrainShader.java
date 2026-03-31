@@ -53,54 +53,84 @@ public class TerrainShader extends GLShader {
                     "uniform sampler2D u_RockNormal;\n" +
                     "uniform sampler2D u_RockRoughness;\n" +
                     "\n" +
+                    "vec3 getSafeNormal(sampler2D tex, vec2 uv) {\n" +
+                    "    vec3 raw = texture(tex, uv).rgb;\n" +
+                    "    if (length(raw) < 0.1) return vec3(0.0, 0.0, 1.0);\n" +
+                    "    vec2 xy = raw.xy * 2.0 - 1.0;\n" +
+                    "    float z = sqrt(max(1.0 - dot(xy, xy), 0.05));\n" +
+                    "    return normalize(vec3(xy, z));\n" +
+                    "}\n" +
+                    "\n" +
                     "void main() {\n" +
                     "    vec3 V = normalize(u_ViewPos - vWorldPos);\n" +
                     "    vec3 baseNormal = normalize(vNormal);\n" +
-                    "    vec3 baseAlbedo; float baseRoughness; float grassMask;\n" +
-                    "    evaluateTerrainMaterial(vWorldPos, baseNormal, u_TerrainMat, baseAlbedo, baseRoughness, grassMask);\n" +
                     "\n" +
                     "    float slope = 1.0 - baseNormal.y;\n" +
                     "    float rockWeight = smoothstep(0.15, 0.35, slope);\n" +
                     "    float grassWeight = 1.0 - rockWeight;\n" +
+                    "    float heightWeight = smoothstep(u_TerrainMat.snowHeight - 2.0, u_TerrainMat.snowHeight + 2.0, vWorldPos.y);\n" +
+                    "    float snowSlopeRetain = 1.0 - smoothstep(0.35, 0.55, slope);\n" +
+                    "    float snowWeight = heightWeight * snowSlopeRetain;\n" +
+                    "    float grassMask = grassWeight * (1.0 - snowWeight);\n" +
+                    "\n" +
+                    "    // --- 1. Albedo 安全提取 (修复 pow 产生 NaN 的致命问题) --- \n" +
+                    "    vec3 texGrass = texture(u_GrassAlbedo, vTexCoord).rgb;\n" +
+                    "    vec3 texRock  = texture(u_RockAlbedo, vTexCoord).rgb;\n" +
                     "    \n" +
-                    "    vec3 finalAlbedo = baseAlbedo;\n" +
-                    "    float finalRoughness = baseRoughness;\n" +
-                    "    vec3 finalNormal = baseNormal;\n" +
-                    "    vec3 texNormalSum = vec3(0.0, 0.0, 1.0);\n" +
+                    "    // 降低判定阈值，防止把暗部贴图像素误判为没加载\n" +
+                    "    vec3 gCol = (length(texGrass) > 0.01 && u_TerrainMat.hasGrassMap > 0.5) ? texGrass : u_TerrainMat.grassColor;\n" +
+                    "    vec3 rCol = (length(texRock) > 0.01 && u_TerrainMat.hasRockMap > 0.5)   ? texRock  : u_TerrainMat.rockColor;\n" +
                     "    \n" +
-                    "    // 强制采样，防止采样器被剔除\n" +
-                    "    vec3 gCol = texture(u_GrassAlbedo, vTexCoord).rgb;\n" +
-                    "    vec3 rCol = texture(u_RockAlbedo, vTexCoord).rgb;\n" +
+                    "    // 【绝对防御】：强制 max(color, 0.0) 截断所有的负数值像素，防止 pow 函数爆炸产生 NaN！\n" +
+                    "    vec3 linGrass = pow(max(gCol, vec3(0.0)), vec3(2.2));\n" +
+                    "    vec3 linRock  = pow(max(rCol, vec3(0.0)), vec3(2.2));\n" +
+                    "    vec3 linSnow  = pow(max(u_TerrainMat.snowColor, vec3(0.0)), vec3(2.2));\n" +
                     "    \n" +
-                    "    if (u_TerrainMat.hasGrassMap > 0.5) {\n" +
-                    "        float snowMix = 1.0 - smoothstep(u_TerrainMat.snowHeight - 2.0, u_TerrainMat.snowHeight + 2.0, vWorldPos.y);\n" +
-                    "        finalAlbedo = mix(finalAlbedo, pow(gCol, vec3(2.2)), grassWeight * snowMix);\n" +
-                    "        finalRoughness = mix(finalRoughness, texture(u_GrassRoughness, vTexCoord).r, grassWeight);\n" +
-                    "        if (u_TerrainMat.hasNormalMap > 0.5) texNormalSum += (texture(u_GrassNormal, vTexCoord).rgb * 2.0 - 1.0) * grassWeight;\n" +
+                    "    vec3 finalAlbedo = mix(linGrass, linRock, rockWeight);\n" +
+                    "    finalAlbedo = mix(finalAlbedo, linSnow, snowWeight);\n" +
+                    "\n" +
+                    "    // --- 2. 粗糙度安全提取 --- \n" +
+                    "    float rGrassTex = texture(u_GrassRoughness, vTexCoord).r;\n" +
+                    "    float rRockTex  = texture(u_RockRoughness, vTexCoord).r;\n" +
+                    "    float rGrass = (rGrassTex > 0.01 && u_TerrainMat.hasGrassMap > 0.5) ? rGrassTex : 0.85;\n" +
+                    "    float rRock  = (rRockTex > 0.01 && u_TerrainMat.hasRockMap > 0.5)   ? rRockTex  : 0.65;\n" +
+                    "    float finalRoughness = mix(rGrass, rRock, rockWeight);\n" +
+                    "    finalRoughness = mix(finalRoughness, 0.45, snowWeight);\n" +
+                    "\n" +
+                    "    // --- 3. 法线处理与阴影终结者修复 --- \n" +
+                    "    vec3 tNormalGrass = vec3(0,0,1);\n" +
+                    "    vec3 tNormalRock  = vec3(0,0,1);\n" +
+                    "    if (u_TerrainMat.hasNormalMap > 0.5) {\n" +
+                    "        tNormalGrass = getSafeNormal(u_GrassNormal, vTexCoord);\n" +
+                    "        tNormalRock  = getSafeNormal(u_RockNormal, vTexCoord);\n" +
                     "    }\n" +
-                    "    \n" +
-                    "    if (u_TerrainMat.hasRockMap > 0.5) {\n" +
-                    "        finalAlbedo = mix(finalAlbedo, pow(rCol, vec3(2.2)), rockWeight);\n" +
-                    "        finalRoughness = mix(finalRoughness, texture(u_RockRoughness, vTexCoord).r, rockWeight);\n" +
-                    "        if (u_TerrainMat.hasNormalMap > 0.5) texNormalSum += (texture(u_RockNormal, vTexCoord).rgb * 2.0 - 1.0) * rockWeight;\n" +
-                    "    }\n" +
-                    "    \n" +
-                    "    if (u_TerrainMat.hasNormalMap > 0.5 && (u_TerrainMat.hasGrassMap > 0.5 || u_TerrainMat.hasRockMap > 0.5)) {\n" +
-                    "        vec3 up = abs(baseNormal.y) < 0.999 ? vec3(0,1,0) : vec3(0,0,1);\n" +
-                    "        mat3 TBN = mat3(normalize(cross(up, baseNormal)), cross(baseNormal, normalize(cross(up, baseNormal))), baseNormal);\n" +
-                    "        finalNormal = normalize(TBN * normalize(texNormalSum));\n" +
+                    "    vec3 mixedTexNormal = normalize(mix(tNormalGrass, tNormalRock, rockWeight));\n" +
+                    "    mixedTexNormal = normalize(mix(mixedTexNormal, vec3(0,0,1), snowWeight));\n" +
+                    "\n" +
+                    "    vec3 helperUp = abs(baseNormal.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0);\n" +
+                    "    vec3 tangent = normalize(cross(helperUp, baseNormal));\n" +
+                    "    vec3 bitangent = normalize(cross(baseNormal, tangent));\n" +
+                    "    mat3 TBN = mat3(tangent, bitangent, baseNormal);\n" +
+                    "    vec3 finalNormal = normalize(TBN * mixedTexNormal);\n" +
+                    "\n" +
+                    "    // 【绝对防御】：防止法线贴图将法线弯曲至背对相机！(Shadow Terminator Fix)\n" +
+                    "    // 如果法线和视线的点积小于极小值，说明法线背对我们了，强制把它拉回来一点，防止 BRDF 崩溃。\n" +
+                    "    float NoV_fix = dot(finalNormal, V);\n" +
+                    "    if (NoV_fix < 0.001) {\n" +
+                    "        finalNormal = normalize(finalNormal + V * (0.001 - NoV_fix));\n" +
                     "    }\n" +
                     "\n" +
+                    "    // --- 4. 渲染核心 --- \n" +
                     "    vec3 color = shadeTerrain(vWorldPos, V, u_SunDir, u_SunIntensity, u_TerrainMat, finalAlbedo, finalNormal, finalRoughness, grassMask);\n" +
                     "\n" +
-                    "    // --- 终极 Usage Guard ---\n" +
-                    "    float guard = (u_SunIntensity.x + u_ViewPos.x + u_SunDir.x + u_TerrainMat.amplitude + u_TerrainMat.frequency + u_TerrainMat.snowHeight) * 0.0000001;\n" +
-                    "    \n" +
-                    "    vec3 mapped = color * 0.8;\n" +
+                    "    float exposure = 3.5; \n" +
+                    "    vec3 mapped = color * exposure;\n" +
                     "    mapped = (mapped * (2.51 * mapped + 0.03)) / (mapped * (2.43 * mapped + 0.59) + 0.14);\n" +
-                    "    FragColor = vec4(pow(mapped, vec3(1.0 / 2.2)) + guard, 1.0);\n" +
+                    "    \n" +
+                    "    // 最后的安全收尾保护\n" +
+                    "    float guard = (u_SunIntensity.x + u_ViewPos.x + u_TerrainMat.amplitude) * 0.00000001;\n" +
+                    "    FragColor = vec4(pow(max(mapped, vec3(0.0)), vec3(1.0 / 2.2)) + abs(guard)*0.0, 1.0);\n" +
                     "}";
-
     public TerrainShader() {
         super("TerrainShader", VERTEX_SRC, FRAGMENT_SRC);
     }

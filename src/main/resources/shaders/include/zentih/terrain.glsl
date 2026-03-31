@@ -124,45 +124,38 @@ float grassMask
     vec3 L = lightDir;
 
     float NoV = clamp(dot(N, V), 0.001, 1.0);
-    float NoL = clamp(dot(N, L), 0.0, 1.0);
+    // 【修复1】将下限从 0.0 改为 0.001，防止 Filament BRDF 内部除以 0 导致 NaN (死黑)
+    float NoL = clamp(dot(N, L), 0.001, 1.0);
 
     // 1. 初始化 PBR 参数
     PBRParams pixel;
-    // 降低一点基础反射率，防止雪地过白（真实雪的反射率约 0.8-0.9）
     pixel.diffuseColor = finalAlbedo * 0.9;
     pixel.f0           = vec3(0.04);
     pixel.roughness    = clamp(finalRoughness, 0.05, 1.0);
     pixel.metallic     = 0.0;
 
     // 2. 直接光着色
-    // 【重要修改】：删除了这里的 *= PI。
-    // Filament 的逻辑中，强度应该由 lightIntensity 决定，不应在外面私自乘 PI。
     vec3 directLighting = surfaceShading(pixel, L, lightIntensity, V, N);
 
-    // 3. 叠加地形特有的草地视觉效果 (系数调小)
-    float sheen = pow(1.0 - NoV, 3.0) * NoL * 0.2; // 从 0.5 降到 0.2
+    // 3. 草地透射 (SSS)
+    float sheen = pow(1.0 - NoV, 3.0) * NoL * 0.2;
     vec3 grassFuzz = finalAlbedo * sheen * grassMask * lightIntensity;
-
-    // 草地背光透射 (SSS)
     float sssFactor = pow(max(0.0, dot(V, -L)), 6.0) * (1.0 - NoV) * 0.1;
     vec3 grassSSS = finalAlbedo * vec3(1.1, 1.1, 0.8) * sssFactor * lightIntensity * grassMask;
 
     // 4. 环境光部分
-    // 增加一个微弱的遮蔽系数，防止山谷底部太亮
-    float ambientAO = mix(0.4, 1.0, N.y * 0.5 + 0.5);
+    float ambientAO = mix(0.4, 1.0, max(0.0, N.y) * 0.5 + 0.5); // 防止底部过暗
     vec3 ambientLighting = finalAlbedo * evaluateAtmosphericAmbient(N, lightDir) * ambientAO;
 
-    // 5. 组合最终颜色
+    // 5. 组合最终颜色 (HDR 线性空间)
     vec3 finalColor = directLighting + grassFuzz + grassSSS + ambientLighting;
 
-    // 6. 【新增】简单的色调映射 (Reinhard Tone Mapping)
-    // 这一步非常关键！它能把 [0, 无穷] 的亮度映射到 [0, 1] 之内，保留高光细节
-    finalColor = finalColor / (finalColor + vec3(1.0));
-
-    // 7. 伽马校正 (如果你的 Engine 没做的话)
-    finalColor = pow(finalColor, vec3(1.0 / 2.2));
+    // 【修复2】删除此处的 Reinhard 和 Gamma，交给 Java 里的 Fragment Shader 统一处理！
+    // finalColor = finalColor / (finalColor + vec3(1.0));
+    // finalColor = pow(finalColor, vec3(1.0 / 2.2));
 
     return finalColor;
 }
+
 
 #endif

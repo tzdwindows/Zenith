@@ -116,6 +116,11 @@ public class Test extends ZenithEngine {
     }
 
     @Override
+    protected void onBufferToScreen(float realDeltaTime, ScreenShader screenShader) {
+        super.onBufferToScreen(realDeltaTime, screenShader);
+    }
+
+    @Override
     protected void update(float deltaTime) {
         if (!sceneInitialized) initScene();
 

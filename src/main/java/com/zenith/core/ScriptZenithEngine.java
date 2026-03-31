@@ -71,11 +71,11 @@ public class ScriptZenithEngine extends ZenithEngine {
     }
 
     @Override
-    protected void onBufferToScreen(ScreenShader screenShader) {
+    protected void onBufferToScreen(float realDeltaTime, ScreenShader screenShader) {
         if (jsOnBufferToScreen != null && jsOnBufferToScreen.canExecute()) {
-            jsOnBufferToScreen.execute(screenShader);
+            jsOnBufferToScreen.execute(realDeltaTime, screenShader);
         }
-        super.onBufferToScreen(screenShader);
+        super.onBufferToScreen(realDeltaTime, screenShader);
     }
 
     @Override
