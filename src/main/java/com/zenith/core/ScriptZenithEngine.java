@@ -4,6 +4,7 @@ import com.zenith.asset.AssetResource;
 import com.zenith.common.utils.InternalLogger;
 import com.zenith.logic.script.ScriptManager;
 import com.zenith.render.Window;
+import com.zenith.render.backend.opengl.shader.ScreenShader;
 import org.graalvm.polyglot.Value;
 
 /**
@@ -17,6 +18,7 @@ public class ScriptZenithEngine extends ZenithEngine {
     private Value jsRenderScene;
     private Value jsRenderAfterOpaque;
     private Value jsInit;
+    private Value jsOnBufferToScreen;
 
     public ScriptZenithEngine(Window window, AssetResource resource) {
         super(window);
@@ -40,6 +42,7 @@ public class ScriptZenithEngine extends ZenithEngine {
             this.jsRenderScene = scriptManager.getGlobal("renderScene");
             this.jsRenderAfterOpaque = scriptManager.getGlobal("renderAfterOpaqueScene");
             this.jsInit = scriptManager.getGlobal("init");
+            this.jsOnBufferToScreen = scriptManager.getGlobal("onBufferToScreen");
             validateFunctions();
             if (jsInit != null && jsInit.canExecute()) {
                 jsInit.execute();
@@ -65,6 +68,14 @@ public class ScriptZenithEngine extends ZenithEngine {
         if (jsRenderScene == null || !jsRenderScene.canExecute()) {
             InternalLogger.warn("未找到 renderScene() 函数。");
         }
+    }
+
+    @Override
+    protected void onBufferToScreen(ScreenShader screenShader) {
+        if (jsOnBufferToScreen != null && jsOnBufferToScreen.canExecute()) {
+            jsOnBufferToScreen.execute(screenShader);
+        }
+        super.onBufferToScreen(screenShader);
     }
 
     @Override

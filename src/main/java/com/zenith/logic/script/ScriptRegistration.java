@@ -15,6 +15,7 @@ public class ScriptRegistration {
         manager.setVariable("Log", new ScriptLogger());
         manager.setVariable("console", new ScriptLogger());
         manager.registerClass("MeshUtils", MeshUtils.class);
+        registerAllInPackage(manager, "com.zenith.audio");
         registerAllInPackage(manager, "com.zenith.common.math");
         registerAllInPackage(manager, "com.zenith.render.backend");
         registerAllInPackage(manager, "com.zenith.render.backend.opengl");
@@ -36,7 +37,7 @@ public class ScriptRegistration {
      * 扫描指定包下的所有类并注册到脚本引擎
      */
     private void registerAllInPackage(ScriptManager manager, String packageName) {
-        InternalLogger.info("正在扫描并注册脚本类库: " + packageName);
+        InternalLogger.debug("正在扫描并注册脚本类库: " + packageName);
         try (ScanResult scanResult = new ClassGraph()
                 .acceptPackages(packageName)
                 .enableClassInfo()
@@ -59,7 +60,7 @@ public class ScriptRegistration {
      * 一次性扫描多个包并注册，极大提升启动性能
      */
     private void registerPackages(ScriptManager manager, List<String> packageNames) {
-        InternalLogger.info("正在执行全量包扫描: " + packageNames);
+        InternalLogger.debug("正在执行全量包扫描: " + packageNames);
         long startTime = System.currentTimeMillis();
         try (ScanResult scanResult = new ClassGraph()
                 .acceptPackages(packageNames.toArray(new String[0]))
@@ -84,7 +85,7 @@ public class ScriptRegistration {
                 }
             }
             long endTime = System.currentTimeMillis();
-            InternalLogger.info("成功注册了 " + count + " 个类，耗时: " + (endTime - startTime) + "ms");
+            InternalLogger.debug("成功注册了 " + count + " 个类，耗时: " + (endTime - startTime) + "ms");
         } catch (Exception e) {
             InternalLogger.error("全量包扫描失败", e);
         }

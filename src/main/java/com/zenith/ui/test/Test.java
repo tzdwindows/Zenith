@@ -11,6 +11,7 @@ import com.zenith.render.backend.opengl.buffer.GLBufferBuilder;
 import com.zenith.render.backend.opengl.GLMaterial;
 import com.zenith.render.backend.opengl.texture.GLTexture;
 import com.zenith.ui.component.UIButton;
+import com.zenith.ui.render.TextureAtlas;
 import com.zenith.ui.render.UIRenderContext;
 import com.zenith.render.backend.opengl.shader.UIShader;
 import org.lwjgl.glfw.GLFW;
@@ -40,21 +41,15 @@ public class Test {
         GLMaterial uiMaterial = new GLMaterial(uiShader);
 
         UIRenderContext uiContext = new UIRenderContext(renderer, bufferBuilder, uiMaterial, uiLayout);
-
-        AssetIdentifier id = new AssetIdentifier("zenith", "textures/test.png");
+        AssetIdentifier id = new AssetIdentifier("zenith", "textures/kenney_game-icons/sheet_white2x.png");
         AssetResource res = loadFromResources(id);
         GLTexture buttonTexture = new GLTexture(res);
-
-        // --- 修改点：直接创建一个固定位置的按钮 ---
-        // 放在 (400, 300) 宽 360 高 80
-        testButton = new UIButton(460, 320, 360, 80, buttonTexture)
-                .setPressedScale(0.85f)              // 点击时明显缩小
-                .setTooltip("adadada")    // 开启 Tooltip 逻辑
-                .setColors(
-                        Color.WHITE,
-                        new Color(0.9f, 0.9f, 1.0f, 1.0f), // 悬停淡蓝
-                        new Color(0.7f, 1.0f, 0.7f, 1.0f)  // 点击变绿
-                );
+        AssetResource xmlRes = AssetResource.loadFromResources("textures/kenney_game-icons/sheet_white2x.xml");
+        TextureAtlas atlas = new TextureAtlas(buttonTexture, xmlRes);
+        testButton = new UIButton(460, 320, 360, 80, atlas, "buttonA.png")
+                .setPressedScale(0.85f)
+                .setOnClick(() -> System.out.println("Click!"))
+                .setColors(Color.WHITE, Color.LIGHT_GRAY, Color.GREEN);
         testButton.setColors(Color.WHITE, Color.LIGHT_GRAY, Color.GREEN);
 
         testButton.setOnClick(() -> {

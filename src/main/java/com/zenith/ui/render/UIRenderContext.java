@@ -12,6 +12,7 @@ import org.joml.Vector3f;
 import org.lwjgl.opengl.GL11;
 
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.util.Stack;
 
@@ -28,6 +29,7 @@ public class UIRenderContext {
     private Matrix4f projectionMatrix;
     private final Stack<Material> materialStack = new Stack<>();
     private com.zenith.render.Texture currentTexture = null;
+    private com.zenith.render.Texture whiteTexture;
 
     public UIRenderContext(Renderer renderer, GLBufferBuilder bufferBuilder, Material uiMaterial, VertexLayout layout) {
         this.renderer = renderer;
@@ -38,6 +40,14 @@ public class UIRenderContext {
         this.uiMesh = new GLMesh(4000, uiLayout);
         this.matrixStack.push(new Matrix4f().identity());
         this.materialStack.push(uiMaterial);
+
+        ByteBuffer buffer = ByteBuffer.allocateDirect(4).order(ByteOrder.nativeOrder());
+        buffer.put((byte) 255); // R
+        buffer.put((byte) 255); // G
+        buffer.put((byte) 255); // B
+        buffer.put((byte) 255); // A
+        buffer.flip();
+        this.whiteTexture = new GLTexture(1, 1, buffer, GL11.GL_RGBA);
     }
 
     public void begin(float width, float height) {
@@ -119,6 +129,38 @@ public class UIRenderContext {
     }
 
     /**
+     * 简化版：按原始大小渲染图标
+     */
+    public void drawSprite(TextureAtlas atlas, String spriteName, float x, float y, Color color) {
+        TextureAtlas.SpriteRegion region = atlas.getRegion(spriteName);
+        if (region != null) {
+            drawSprite(atlas, spriteName, x, y, region.w, region.h, color);
+        }
+    }
+
+    /**
+     * 使用图集渲染指定的图标
+     * @param atlas 解析后的图集对象
+     * @param spriteName XML 中的名称，例如 "gear.png"
+     * @param x 屏幕位置 X
+     * @param y 屏幕位置 Y
+     * @param w 渲染宽度 (通常设为 region.w)
+     * @param h 渲染高度 (通常设为 region.h)
+     * @param color 颜色过滤（通过白色图标乘法实现变色）
+     */
+    public void drawSprite(TextureAtlas atlas, String spriteName, float x, float y, float w, float h, Color color) {
+        TextureAtlas.SpriteRegion region = atlas.getRegion(spriteName);
+        if (region == null) return;
+        bindTexture(atlas.getTexture());
+        drawTextureRect(
+                x, y, w, h,
+                region.u, region.v,
+                region.uw, region.uh,
+                color
+        );
+    }
+
+    /**
      * 渲染带背景的 Tooltip 专用快捷方法
      */
     public void drawTooltip(String text, float mouseX, float mouseY) {
@@ -161,13 +203,13 @@ public class UIRenderContext {
     }
 
     public void drawRect(Rectf bounds, Color color) {
-        // 预防溢出。一个矩形 6 个顶点，如果超过 Mesh 上限或 Buffer 剩余空间不足，强制 Flush
+        bindTexture(whiteTexture);
+
         if (bufferBuilder.getVertexCount() + 6 >= 4000) {
             flushBatch();
         }
 
         Matrix4f modelMatrix = matrixStack.peek();
-
         float x1 = bounds.getLeft();
         float y1 = bounds.getTop();
         float x2 = bounds.getRight();
@@ -178,6 +220,7 @@ public class UIRenderContext {
         Vector3f v3 = modelMatrix.transformPosition(new Vector3f(x2, y2, 0), new Vector3f());
         Vector3f v4 = modelMatrix.transformPosition(new Vector3f(x2, y1, 0), new Vector3f());
 
+        // UV 设置为 0~1，配合白色纹理
         emitVertex(v1, 0, 0, color);
         emitVertex(v2, 0, 1, color);
         emitVertex(v3, 1, 1, color);

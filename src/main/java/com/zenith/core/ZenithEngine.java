@@ -6,8 +6,10 @@ import com.zenith.render.VertexLayout;
 import com.zenith.render.Window;
 import com.zenith.render.backend.opengl.*;
 import com.zenith.render.backend.opengl.buffer.GLBufferBuilder;
+import com.zenith.render.backend.opengl.shader.ScreenShader;
 import com.zenith.render.backend.opengl.shader.UIShader;
 import com.zenith.ui.DebugInfoScreen;
+import com.zenith.ui.EscInfoScreen;
 import com.zenith.ui.UIScreen;
 import com.zenith.ui.render.UIRenderContext;
 import org.joml.FrustumIntersection;
@@ -42,6 +44,7 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     protected UIRenderContext uiContext;
     protected final List<UIScreen> screens = new ArrayList<>();
     private DebugInfoScreen debugOverlay;
+    private EscInfoScreen escScreen;
     private boolean showDebug = true;
     protected boolean isCursorLocked = true;
     protected float cameraYaw = -90.0f;
@@ -53,6 +56,7 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     private final Vector3f tempFront = new Vector3f();
     private final Vector3f tempRight = new Vector3f();
     private final Vector3f worldUp = new Vector3f(0, 1, 0);
+    private boolean isRunning = true;
     protected SceneFramebuffer sceneFBO;
     public ZenithEngine(Window window) {
         this.window = window;
@@ -70,6 +74,8 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
         this.renderer = new GLRenderer();
         initUIContext();
         this.debugOverlay = new DebugInfoScreen(this);
+        this.escScreen = new EscInfoScreen(this);
+        this.escScreen.setVisible(false);
         int[] w = new int[1], h = new int[1];
         glfwGetFramebufferSize(((GLWindow)window).getHandle(), w, h);
         sceneFBO = new SceneFramebuffer(w[0], h[0]);
@@ -92,7 +98,7 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
         this.uiContext = new UIRenderContext(renderer, bufferBuilder, uiMaterial, uiLayout);
     }
 
-    protected void setCursorMode(boolean lock) {
+    public void setCursorMode(boolean lock) {
         this.isCursorLocked = lock;
         long handle = ((GLWindow)window).getHandle();
         glfwSetInputMode(handle, GLFW_CURSOR, lock ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
@@ -101,6 +107,7 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
 
     private void loop() {
         long handle = (window).getHandle();
+
         while (running && !window.shouldClose()) {
             glfwPollEvents();
             if (window.getWidth() <= 0 || window.getHeight() <= 0) {
@@ -109,40 +116,45 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
             }
             boolean isFocused = glfwGetWindowAttrib(handle, GLFW_FOCUSED) == GLFW_TRUE;
             if (!isFocused) {
-                try {
-                    Thread.sleep(60);
-                } catch (InterruptedException ignored) {}
+                try { Thread.sleep(60); } catch (InterruptedException ignored) {}
             }
             float currentTime = (float) glfwGetTime();
-            float deltaTime = currentTime - lastFrameTime;
+            float realDeltaTime = currentTime - lastFrameTime;
             lastFrameTime = currentTime;
-            if (deltaTime > 0.1f) deltaTime = 0.1f;
+            if (realDeltaTime > 0.1f) realDeltaTime = 0.1f;
+            float logicDeltaTime = isRunning ? realDeltaTime : 0.0f;
             if (isCursorLocked && isFocused) {
-                updateCameraInput(deltaTime);
+                updateCameraInput(logicDeltaTime);
             }
             for (UIScreen screen : screens) {
                 if (screen.isVisible()) {
-                    screen.update(deltaTime);
+                    screen.update(realDeltaTime);
                 }
             }
-            update(deltaTime);
+            update(logicDeltaTime);
             viewProjMatrix.set(camera.getProjection().getMatrix()).mul(camera.getViewMatrix());
             frustumIntersection.set(viewProjMatrix);
             sceneFBO.bind();
             glViewport(0, 0, window.getWidth(), window.getHeight());
             glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
             renderScene();
             sceneFBO.copyToHistory();
             renderAfterOpaqueScene();
             sceneFBO.unbind();
             glViewport(0, 0, window.getWidth(), window.getHeight());
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            onBufferToScreen(sceneFBO.getScreenShader());
             sceneFBO.renderToScreen();
-            renderUI(deltaTime);
+            renderUI(realDeltaTime);
             window.update();
         }
         cleanup();
+    }
+
+    public void setRunning(boolean running) {
+        this.isRunning = running;
     }
 
     /**
@@ -168,8 +180,7 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
         tempPos.set(pos).add(tempFront);
         camera.lookAt(tempPos, worldUp);
     }
-
-    private void renderUI(float deltaTime) {
+    private void renderUI(float realDeltaTime) {
         GL11.glEnable(GL11.GL_BLEND);
         GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
         GL11.glDisable(GL11.GL_DEPTH_TEST);
@@ -179,13 +190,22 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
 
         for (UIScreen screen : screens) {
             if (screen.isVisible()) {
+                screen.update(realDeltaTime);
                 screen.render(uiContext);
             }
         }
 
         if (debugOverlay != null && showDebug) {
-            debugOverlay.update(deltaTime);
+            debugOverlay.update(realDeltaTime);
             debugOverlay.render(uiContext);
+        }
+
+        if (escScreen != null && escScreen.isVisible()) {
+            escScreen.update(realDeltaTime);
+            escScreen.render(uiContext);
+            setRunning(false);
+        } else {
+            setRunning(true);
         }
 
         uiContext.end();
@@ -206,12 +226,14 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
                     break;
                 case GLFW_KEY_ESCAPE:
                     setCursorMode(!isCursorLocked);
-                    break;
-                case GLFW_KEY_END:
+                    if (escScreen != null) {
+                        escScreen.setVisible(!isCursorLocked);
+                    }
                     break;
             }
         }
     }
+
 
     @Override
     public void onCursorPos(double xpos, double ypos) {
@@ -233,10 +255,15 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
             if (cameraPitch > 89.0f) cameraPitch = 89.0f;
             if (cameraPitch < -89.0f) cameraPitch = -89.0f;
         } else {
+            float mx = (float) xpos;
+            float my = (float) ypos;
+            if (escScreen != null && escScreen.isVisible()) {
+                escScreen.onMouseMove(mx, my);
+            }
             for (int i = screens.size() - 1; i >= 0; i--) {
                 UIScreen screen = screens.get(i);
                 if (screen.isVisible()) {
-                    screen.onMouseMove((float)xpos, (float)ypos);
+                    screen.onMouseMove(mx, my);
                 }
             }
         }
@@ -251,6 +278,15 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
             glfwGetCursorPos(((GLWindow)window).getHandle(), x, y);
             float mx = (float)x[0];
             float my = (float)y[0];
+
+            // --- 优先处理 Esc 菜单的点击 ---
+            if (escScreen != null && escScreen.isVisible()) {
+                if (escScreen.onMouseButton(action, mx, my)) {
+                    return;
+                }
+            }
+
+            // 处理常规 screens 列表的点击
             for (int i = screens.size() - 1; i >= 0; i--) {
                 UIScreen screen = screens.get(i);
                 if (screen.isVisible()) {
@@ -279,8 +315,24 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     public Renderer getRenderer() { return renderer; }
     public Camera getCamera() { return camera; }
 
+    /**
+     * 当渲染器初始化时
+     */
     protected abstract void init();
+
+    /**
+     * 当游戏循环中每一帧被调用（用于渲染物品、地形）
+     * @param deltaTime 帧间隔时间
+     */
     protected abstract void update(float deltaTime);
+
+    /**
+     * 当缓冲区内容即将显示在屏幕中时被调用，可以用于制作屏幕特效
+     * @param screenShader 缓冲区渲染状态
+     */
+    protected void onBufferToScreen(ScreenShader screenShader){
+
+    }
     protected abstract void renderScene();
     protected abstract void renderAfterOpaqueScene();
 

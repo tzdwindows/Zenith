@@ -1,12 +1,13 @@
 package com.zenith.ui;
 
+import com.zenith.ui.component.UIButton;
 import com.zenith.ui.component.UIComponent;
 import com.zenith.ui.render.UIRenderContext;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * UI 屏幕/画布抽象类，用于管理一组 UI 组件
+ * UI 屏幕基类 - 彻底修复右下角偏移问题
  */
 public abstract class UIScreen {
     protected final List<UIComponent> components = new ArrayList<>();
@@ -25,22 +26,32 @@ public abstract class UIScreen {
 
     public void render(UIRenderContext ctx) {
         if (!visible) return;
+
         for (UIComponent comp : components) {
-            comp.render(ctx);
+            if (comp instanceof UIButton btn) {
+                btn.onRender(ctx);
+            } else {
+                comp.render(ctx);
+            }
+        }
+
+        for (UIComponent comp : components) {
+            if (comp instanceof UIButton btn) {
+                btn.renderOverlay(ctx);
+            }
         }
     }
 
     /**
-     * @return 如果事件被消耗（点击到了组件），返回 true
+     * 鼠标移动：直接传递绝对屏幕坐标
      */
     public boolean onMouseMove(float mx, float my) {
         if (!visible) return false;
         boolean consumed = false;
         for (int i = components.size() - 1; i >= 0; i--) {
             UIComponent comp = components.get(i);
-            float bx = mx - comp.getBounds().x;
-            float by = my - comp.getBounds().y;
-            if (comp.onMouseMove(bx, by)) {
+            // 绝对不能减去 bounds.x，直接传 mx, my
+            if (comp.onMouseMove(mx, my)) {
                 consumed = true;
             }
         }
@@ -48,32 +59,23 @@ public abstract class UIScreen {
     }
 
     /**
-     * @return 如果点击了组件或 UI 背景，返回 true 以拦截事件
+     * 鼠标点击：直接传递绝对屏幕坐标
      */
     public boolean onMouseButton(int action, float mx, float my) {
         if (!visible) return false;
 
-        // 1. 检查是否点击到了某个组件
         for (int i = components.size() - 1; i >= 0; i--) {
             UIComponent comp = components.get(i);
-            // 简单的碰撞检测：检查鼠标是否在组件边界内
             if (comp.getBounds().contains(mx, my)) {
-                float bx = mx - comp.getBounds().x;
-                float by = my - comp.getBounds().y;
-                comp.onMouseButton(action, bx, by);
-                return true; // 拦截事件，不再传给下层 Screen
+                // 绝对不能减去 bounds.x，直接传 mx, my
+                comp.onMouseButton(action, mx, my);
+                return true;
             }
         }
-
-        // 2. 如果你的 Screen 是全屏模态窗口（如主菜单），即使没点到按钮也要拦截
         return isModal();
     }
 
-    /**
-     * 子类可覆盖此方法。如果返回 true，即使没点到按钮，点击也不会穿透到下层。
-     */
     public boolean isModal() { return false; }
-
     public void setVisible(boolean visible) { this.visible = visible; }
     public boolean isVisible() { return visible; }
 }

@@ -37,8 +37,10 @@ public class ScriptManager implements AutoCloseable {
                 .build();
         this.context = Context.newBuilder("js")
                 .allowHostAccess(hostAccess)
+                .allowExperimentalOptions(true)
                 .allowHostClassLookup(className -> true)
                 .option("js.ecmascript-version", "2022")
+                .option("js.stack-trace-limit", "10")
                 .build();
 
         this.bindings = context.getBindings("js");

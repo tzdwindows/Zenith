@@ -142,4 +142,8 @@ public class GLShader extends Shader {
         }
         return location;
     }
+
+    public int getRendererID_Internal() {
+        return rendererID;
+    }
 }
