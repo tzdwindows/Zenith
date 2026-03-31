@@ -126,17 +126,12 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     private void startAsyncInitialization() {
         Thread loadThread = new Thread(() -> {
             try {
-                // 后台线程：只做 CPU / IO 密集型工作
                 asyncLoad();
-
-                // 主线程：只做 OpenGL 资源绑定等轻量操作
                 runOnMainThread(() -> {
                     try {
                         init();
                         isLoading = false;
                         setCursorMode(true);
-
-                        // 加载结束后再恢复 vsync
                         glfwSwapInterval(1);
                     } catch (Exception e) {
                         e.printStackTrace();
@@ -151,10 +146,7 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     }
 
     private void initLoadingScreenShader() {
-        // 直接使用封装好的类
         loadingShader = new LoadingScreenShader();
-
-        // 使用全屏大三角形代替 Quad (性能更好)
         float[] vertices = {
                 -1.0f, -1.0f,
                 3.0f, -1.0f,
@@ -465,22 +457,74 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     public Camera getCamera() { return camera; }
 
     /**
-     * 【新增】异步数据加载。
-     * 此方法在单独的后台线程运行。适合做文件读取、模型解析、地形计算等 CPU 密集型操作。
+     * <h3>异步数据加载回调 (非主线程)</h3>
+     * * <p>该方法在独立的后台线程 {@code Zenith-Async-Load-Thread} 中执行。
+     * 适合进行以下操作：</p>
+     * <ul>
+     * <li>硬盘 I/O：读取配置文件、加载大型模型文件、解析 JSON/二进制数据。</li>
+     * <li>计算密集型任务：地形网格生成、寻路算法预计算、纹理像素处理。</li>
+     * <li>网络请求：下载必要的资源包。</li>
+     * </ul>
+     * * <p><b>注意：</b> 由于 OpenGL 不是线程安全的，你<b>不能</b>在此方法中直接调用任何
+     * {@code glGenXXX} 或 {@code glBindTexture} 等绘图 API。
+     * 如果需要生成 OpenGL 对象，请使用 {@link #runOnMainThread(Runnable)}。</p>
      */
     protected void asyncLoad() { }
 
     /**
-     * 当渲染器初始化时 (在主线程运行，适合绑定 OpenGL 资源如 VAO、Texture)
+     * <h3>同步初始化回调 (主线程)</h3>
+     * * <p>该方法在 {@link #asyncLoad()} 完成后，在主线程（渲染线程）中被调用。
+     * 此时加载画面即将关闭，标志着引擎正式进入游戏状态。</p>
+     * * <p>适合进行以下操作：</p>
+     * <ul>
+     * <li>将 {@code asyncLoad} 准备好的原始数据上传至 GPU (生成 VAO, VBO, EBO)。</li>
+     * <li>初始化着色器变量 Uniforms。</li>
+     * <li>绑定最终的纹理对象。</li>
+     * </ul>
      */
     protected void init() { }
 
+    /**
+     * <h3>逻辑更新 (每帧执行)</h3>
+     * * @param deltaTime 从上一帧到当前帧的时间间隔（秒）。
+     * <br>当引擎暂停（例如打开 ESC 菜单）时，若 {@code isRunning} 为 false，则此值为 0.0。
+     * * <p>实现类应在此处理：实体位移、物理碰撞检测、AI 逻辑、计时器更新等。
+     * 建议所有位移计算都乘以 {@code deltaTime} 以确保帧率无关性。</p>
+     */
     protected abstract void update(float deltaTime);
 
+    /**
+     * <h3>全屏后期处理回调</h3>
+     * * @param realDeltaTime 真实的物理时间间隔（不受暂停影响）。
+     * @param screenShader 当前场景用于渲染到屏幕的 {@link ScreenShader} 实例。
+     * * <p>此方法在场景 FBO 渲染完成后、正式绘制到屏幕前触发。
+     * 你可以在此处设置后期处理着色器的参数，例如：</p>
+     * <ul>
+     * <li>调整曝光度、对比度或 Gamma 值。</li>
+     * <li>传递动态模糊所需的运动矢量。</li>
+     * <li>应用复古滤镜的时间偏移量。</li>
+     * </ul>
+     */
     protected void onBufferToScreen(float realDeltaTime, ScreenShader screenShader) { }
 
+    /**
+     * <h3>主场景渲染 (不透明物体)</h3>
+     * * <p>该方法在 {@code sceneFBO} 绑定期间被调用。
+     * 实现类应在此渲染所有的 3D 几何体（如地形、玩家、建筑物）。</p>
+     * * <p><b>渲染顺序建议：</b> 先绘制离相机近的物体，以利用深度测试（Early-Z）优化性能。</p>
+     */
     protected abstract void renderScene();
 
+    /**
+     * <h3>场景渲染扩展 (半透明/装饰物体)</h3>
+     * * <p>该方法在 {@link #renderScene()} 之后、FBO 解绑前执行。</p>
+     * * <p>适合渲染：</p>
+     * <ul>
+     * <li>具有 Alpha 混合的半透明物体（如玻璃、水面）。</li>
+     * <li>粒子系统（火焰、烟雾）。</li>
+     * <li>调试线框或 3D 辅助线。</li>
+     * </ul>
+     */
     protected abstract void renderAfterOpaqueScene();
 
     private void cleanup() {
