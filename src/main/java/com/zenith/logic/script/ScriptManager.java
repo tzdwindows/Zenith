@@ -80,6 +80,15 @@ public class ScriptManager implements AutoCloseable {
     }
 
     /**
+     * 检查脚本上下文中是否已经注册了指定名称的类或变量
+     * @param name 注册名称
+     * @return 如果已存在则返回 true
+     */
+    public boolean hasClass(String name) {
+        return bindings.hasMember(name);
+    }
+
+    /**
      * 强制重载某个脚本
      */
     public void forceReload(AssetResource resource) {
@@ -96,9 +105,16 @@ public class ScriptManager implements AutoCloseable {
         bindings.putMember(name, function);
     }
 
+    /**
+     * 注册 Java 类到脚本引擎
+     */
     public void registerClass(String name, Class<?> clazz) {
-        Value type = context.eval("js", "Java.type('" + clazz.getName() + "')");
-        bindings.putMember(name, type);
+        try {
+            Value type = context.eval("js", "Java.type('" + clazz.getName() + "')");
+            bindings.putMember(name, type);
+        } catch (Exception e) {
+            InternalLogger.error("注册类到脚本引擎失败: " + name + " (" + clazz.getName() + ")", e);
+        }
     }
 
     public void setVariable(String name, Object value) {

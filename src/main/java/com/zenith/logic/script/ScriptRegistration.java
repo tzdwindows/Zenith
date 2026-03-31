@@ -29,7 +29,11 @@ public class ScriptRegistration {
         registerAllInPackage(manager, "com.zenith.ui.render");
         registerAllInPackage(manager, "com.zenith.ui.skin");
         registerAllInPackage(manager, "com.zenith.asset");
-        registerPackages(manager, List.of("org.lwjgl", "org.joml"));
+        registerPackages(manager, List.of(
+                "org.lwjgl",
+                "org.joml",
+                "de.fabmax.physxjni"
+        ));
         manager.registerClass("ZenithEngine", ZenithEngine.class);
     }
 
@@ -62,26 +66,50 @@ public class ScriptRegistration {
     private void registerPackages(ScriptManager manager, List<String> packageNames) {
         InternalLogger.debug("正在执行全量包扫描: " + packageNames);
         long startTime = System.currentTimeMillis();
+
         try (ScanResult scanResult = new ClassGraph()
                 .acceptPackages(packageNames.toArray(new String[0]))
-                .rejectPackages("org.lwjgl.system.libc", "org.lwjgl.system.linux", "org.lwjgl.system.windows")
+                // 排除不需要的系统底层实现包
+                .rejectPackages(
+                        "org.lwjgl.system.libc",
+                        "org.lwjgl.system.linux",
+                        "org.lwjgl.system.windows",
+                        "de.fabmax.physxjni.windows",
+                        "de.fabmax.physxjni.linux",
+                        "de.fabmax.physxjni.macosx"
+                )
                 .enableClassInfo()
                 .scan()) {
+
             int count = 0;
             for (ClassInfo classInfo : scanResult.getAllClasses()) {
                 if (classInfo.isAnonymousInnerClass() || classInfo.isSynthetic() || !classInfo.isPublic()) {
                     continue;
                 }
                 String simpleName = classInfo.getSimpleName();
+                String packageName = classInfo.getPackageName();
                 if (simpleName.isEmpty() || simpleName.contains("$")) continue;
-                Class<?> clazz = classInfo.loadClass();
                 if (simpleName.equals("Math") || simpleName.equals("String") || simpleName.equals("Object")) {
                     simpleName = "J" + simpleName;
                 }
+                if (manager.hasClass(simpleName)) {
+                    if (packageName.startsWith("de.fabmax.physxjni")) {
+                        if (!simpleName.startsWith("Px")) {
+                            simpleName = "Px" + simpleName;
+                        } else {
+                            continue;
+                        }
+                    }
+                    else if (!packageName.startsWith("com.zenith")) {
+                        continue;
+                    }
+                }
+
                 try {
+                    Class<?> clazz = classInfo.loadClass();
                     manager.registerClass(simpleName, clazz);
                     count++;
-                } catch (Exception e) {
+                } catch (Throwable t) {
                 }
             }
             long endTime = System.currentTimeMillis();

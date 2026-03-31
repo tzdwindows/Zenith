@@ -131,7 +131,18 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
                     try {
                         init();
                         isLoading = false;
-                        setCursorMode(true);
+
+                        // --- 修复点 1：加载完成时检查焦点 ---
+                        long handle = ((GLWindow)window).getHandle();
+                        boolean isFocused = glfwGetWindowAttrib(handle, GLFW_FOCUSED) == GLFW_TRUE;
+
+                        if (isFocused) {
+                            setCursorMode(true);
+                        } else {
+                            setCursorMode(false);
+                            if (escScreen != null) escScreen.setVisible(true);
+                        }
+
                         glfwSwapInterval(1);
                     } catch (Exception e) {
                         e.printStackTrace();
@@ -144,6 +155,7 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
         loadThread.setPriority(Thread.MIN_PRIORITY + 1);
         loadThread.start();
     }
+
 
     private void initLoadingScreenShader() {
         loadingShader = new LoadingScreenShader();
@@ -175,7 +187,7 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
 
         glClearColor(0.02f, 0.02f, 0.05f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
+        sceneFBO.ensureResources();
         if (loadingShader == null) return;
 
         loadingShader.bind();
@@ -215,16 +227,10 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
         while (running && !window.shouldClose()) {
             glfwPollEvents();
 
-            // 每帧处理少量主线程任务，避免队列堆积
             Runnable task;
             int tasksProcessed = 0;
-            final int maxTasksPerFrame = 4;
-            while ((task = mainThreadTasks.poll()) != null && tasksProcessed < maxTasksPerFrame) {
-                try {
-                    task.run();
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
+            while ((task = mainThreadTasks.poll()) != null && tasksProcessed < 4) {
+                task.run();
                 tasksProcessed++;
             }
 
@@ -237,16 +243,18 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
             float realDeltaTime = currentTime - lastFrameTime;
             lastFrameTime = currentTime;
 
-            // 加载动画阶段：只渲染，不做别的重逻辑
             if (isLoading) {
                 renderLoadingAnimation(currentTime);
                 window.update();
                 continue;
             }
 
+            // --- 修复点 2：实时监测窗口焦点状态 ---
             boolean isFocused = glfwGetWindowAttrib(handle, GLFW_FOCUSED) == GLFW_TRUE;
-            if (!isFocused) {
-                try { Thread.sleep(16); } catch (InterruptedException ignored) {}
+            if (!isFocused && isCursorLocked) {
+                // 窗口被遮挡或切换了：强制释放鼠标，弹出 ESC
+                setCursorMode(false);
+                if (escScreen != null) escScreen.setVisible(true);
             }
 
             if (realDeltaTime > 0.1f) realDeltaTime = 0.1f;
@@ -254,12 +262,6 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
 
             if (isCursorLocked && isFocused) {
                 updateCameraInput(logicDeltaTime);
-            }
-
-            for (UIScreen screen : screens) {
-                if (screen.isVisible()) {
-                    screen.update(realDeltaTime);
-                }
             }
 
             update(logicDeltaTime);
@@ -280,16 +282,15 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
             glViewport(0, 0, window.getWidth(), window.getHeight());
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-            sceneFBO.ensureResources();
             onBufferToScreen(logicDeltaTime, sceneFBO.getScreenShader());
             sceneFBO.renderToScreen();
             renderUI(realDeltaTime);
 
             window.update();
         }
-
         cleanup();
     }
+
 
     public void setRunning(boolean running) {
         this.isRunning = running;
@@ -412,31 +413,31 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     @Override
     public void onMouseButton(int button, int action, int mods) {
         if (button >= 0 && button < 8) mouseButtons[button] = (action != GLFW_RELEASE);
-
         if (isLoading) return;
 
         if (!isCursorLocked) {
-            double[] x = new double[1], y = new double[1];
-            glfwGetCursorPos(((GLWindow)window).getHandle(), x, y);
-            float mx = (float)x[0];
-            float my = (float)y[0];
-
-            if (escScreen != null && escScreen.isVisible()) {
-                if (escScreen.onMouseButton(action, mx, my)) {
+            // --- 修复点 3：如果点击了窗口，且 ESC 菜单没打开，尝试找回焦点 ---
+            if (action == GLFW_PRESS && button == GLFW_MOUSE_BUTTON_LEFT) {
+                if (escScreen != null && !escScreen.isVisible()) {
+                    setCursorMode(true);
                     return;
                 }
             }
 
+            double[] x = new double[1], y = new double[1];
+            glfwGetCursorPos(((GLWindow)window).getHandle(), x, y);
+            float mx = (float)x[0], my = (float)y[0];
+
+            if (escScreen != null && escScreen.isVisible()) {
+                if (escScreen.onMouseButton(action, mx, my)) return;
+            }
             for (int i = screens.size() - 1; i >= 0; i--) {
                 UIScreen screen = screens.get(i);
-                if (screen.isVisible()) {
-                    if (screen.onMouseButton(action, mx, my)) {
-                        return;
-                    }
-                }
+                if (screen.isVisible() && screen.onMouseButton(action, mx, my)) return;
             }
         }
     }
+
 
     @Override
     public void onScroll(double x, double y) {

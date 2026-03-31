@@ -11,7 +11,8 @@ import java.util.List;
 
 public class StandardShader extends GLShader {
 
-    private static final int MAX_LIGHTS = 8;
+    // 增加最大光源数量以适应复杂场景
+    private static final int MAX_LIGHTS = 16;
     private final List<GLLight> lights = new ArrayList<>();
 
     private static final String VERTEX_SRC =
@@ -53,6 +54,19 @@ public class StandardShader extends GLShader {
                     "    float metallic;\n" +
                     "};\n" +
                     "\n" +
+                    "// 现代游戏引擎标准的光源结构体\n" +
+                    "struct Light {\n" +
+                    "    int type;           // 0: 平行光(太阳), 1: 点光源(火把), 2: 聚光灯(手电筒)\n" +
+                    "    vec3 position;      // 光源位置\n" +
+                    "    vec3 direction;     // 光照方向 (用于平行光和聚光灯)\n" +
+                    "    vec4 color;         // 光照颜色\n" +
+                    "    float intensity;    // 光照强度\n" +
+                    "    float range;        // 最大衰减半径\n" +
+                    "    float innerCutOff;  // 聚光灯内圆锥角 (余弦值)\n" +
+                    "    float outerCutOff;  // 聚光灯外圆锥角 (余弦值)\n" +
+                    "    float ambientStrength;// 环境光贡献度\n" +
+                    "};\n" +
+                    "\n" +
                     "#include \"filament/common_math.glsl\"\n" +
                     "#include \"filament/brdf.glsl\"\n" +
                     "#include \"shading_indirect.glsl\"\n" +
@@ -68,44 +82,37 @@ public class StandardShader extends GLShader {
                     "uniform vec4 u_TextColor;\n" +
                     "uniform vec3 u_ViewPos;\n" +
                     "uniform float u_UseTexture;\n" +
-                    "uniform float u_IsEmissive;\n" +
                     "\n" +
-                    "uniform vec3 u_LightPos[8];\n" +
-                    "uniform vec4 u_LightColor[8];\n" +
-                    "uniform float u_LightIntensity[8];\n" +
-                    "uniform float u_LightCount;\n" +
+                    "// 自发光参数\n" +
+                    "uniform float u_IsEmissive;\n" +
+                    "uniform vec3 u_EmissiveColor;\n" +
+                    "uniform float u_EmissiveIntensity;\n" +
+                    "\n" +
+                    "uniform Light u_Lights[16];\n" +
+                    "uniform int u_LightCount;\n" +
+                    "\n" +
+                    "// Unreal Engine 风格的物理平方反比衰减\n" +
+                    "float calculateAttenuation(float dist, float range) {\n" +
+                    "    float distSq = dist * dist;\n" +
+                    "    float attenuation = 1.0 / max(distSq, 0.0001);\n" +
+                    "    // 窗口函数，确保在 range 边缘平滑降为 0\n" +
+                    "    float distOverRange = dist / max(range, 0.001);\n" +
+                    "    float windowing = clamp(1.0 - pow(distOverRange, 4.0), 0.0, 1.0);\n" +
+                    "    return attenuation * windowing * windowing;\n" +
+                    "}\n" +
                     "\n" +
                     "void main() {\n" +
-                    "    // 1. 基础颜色获取\n" +
                     "    vec4 texColor = (u_UseTexture > 0.5) ? texture(u_Texture, vTexCoord) : vec4(1.0);\n" +
                     "    if (u_UseTexture > 0.5 && texColor.a < 0.05) discard;\n" +
                     "    \n" +
                     "    vec3 rawColor = u_TextColor.rgb * vColor.rgb * texColor.rgb;\n" +
-                    "    \n" +
-                    "    // --- 修改后的增强自发光逻辑 --- \n" +
-                    "    if (u_IsEmissive > 0.5) {\n" +
-                    "        vec3 N = normalize(vNormal);\n" +
-                    "        vec3 V = normalize(u_ViewPos - vWorldPos);\n" +
-                    "        \n" +
-                    "        // 计算边缘发光强度\n" +
-                    "        float fresnel = pow(1.0 - max(dot(N, V), 0.0), 2.5);\n" +
-                    "        \n" +
-                    "        // 颜色混合：中心亮白，边缘为传入的颜色\n" +
-                    "        // 这里手动跳过 finalizeColor 以免亮度被截断\n" +
-                    "        vec3 emissive = mix(rawColor * 2.0, vec3(1.5, 1.5, 1.2), fresnel);\n" +
-                    "        \n" +
-                    "        // 简单的伽马映射保底\n" +
-                    "        FragColor = vec4(pow(emissive, vec3(1.0/2.2)), u_TextColor.a);\n" +
-                    "        return;\n" +
-                    "    }\n" +
+                    "    vec3 N = normalize(vNormal);\n" +
+                    "    vec3 V = normalize(u_ViewPos - vWorldPos);\n" +
                     "\n" +
-                    "    // 2. 标准 PBR 逻辑\n" +
+                    "    // 1. 标准 PBR 参数设置\n" +
                     "    vec3 baseColor = pow(rawColor, vec3(2.2));\n" +
                     "    float mVal = clamp(u_TextColor.a, 0.0, 1.0);\n" +
                     "    float rVal = clamp(vColor.a < 0.01 ? 0.5 : vColor.a, 0.05, 1.0);\n" +
-                    "\n" +
-                    "    vec3 N = normalize(vNormal);\n" +
-                    "    vec3 V = normalize(u_ViewPos - vWorldPos);\n" +
                     "\n" +
                     "    PBRParams pixel;\n" +
                     "    pixel.diffuseColor = baseColor * (1.0 - mVal);\n" +
@@ -113,11 +120,55 @@ public class StandardShader extends GLShader {
                     "    pixel.roughness = rVal;\n" +
                     "    pixel.metallic = mVal;\n" +
                     "\n" +
+                    "    // 2. 光照累加计算\n" +
                     "    vec3 Lo = evaluateIBL(pixel, N, V);\n" +
-                    "    for(int i = 0; i < int(u_LightCount); i++) {\n" +
-                    "        vec3 L = normalize(u_LightPos[i] - vWorldPos);\n" +
-                    "        vec3 lightCol = u_LightColor[i].rgb * u_LightIntensity[i];\n" +
-                    "        Lo += surfaceShading(pixel, L, lightCol, V, N);\n" +
+                    "    vec3 ambientTotal = vec3(0.0);\n" +
+                    "\n" +
+                    "    for(int i = 0; i < u_LightCount; i++) {\n" +
+                    "        vec3 L;\n" +
+                    "        float attenuation = 1.0;\n" +
+                    "        \n" +
+                    "        if (u_Lights[i].type == 0) {\n" +
+                    "            // 平行光 (Sun/Moon)\n" +
+                    "            L = normalize(-u_Lights[i].direction);\n" +
+                    "            ambientTotal += baseColor * u_Lights[i].color.rgb * u_Lights[i].ambientStrength;\n" +
+                    "        } else {\n" +
+                    "            // 点光源 / 聚光灯\n" +
+                    "            vec3 lightVec = u_Lights[i].position - vWorldPos;\n" +
+                    "            float dist = length(lightVec);\n" +
+                    "            L = lightVec / dist;\n" +
+                    "            \n" +
+                    "            // 物理距离衰减\n" +
+                    "            attenuation = calculateAttenuation(dist, u_Lights[i].range);\n" +
+                    "            \n" +
+                    "            if (u_Lights[i].type == 2) {\n" +
+                    "                // 聚光灯圆锥边缘柔和衰减\n" +
+                    "                float theta = dot(L, normalize(-u_Lights[i].direction));\n" +
+                    "                float epsilon = u_Lights[i].innerCutOff - u_Lights[i].outerCutOff;\n" +
+                    "                float spotEffect = clamp((theta - u_Lights[i].outerCutOff) / epsilon, 0.0, 1.0);\n" +
+                    "                attenuation *= spotEffect;\n" +
+                    "            }\n" +
+                    "        }\n" +
+                    "\n" +
+                    "        if (attenuation > 0.0 || u_Lights[i].type == 0) {\n" +
+                    "            vec3 radiance = u_Lights[i].color.rgb * u_Lights[i].intensity * attenuation;\n" +
+                    "            Lo += surfaceShading(pixel, L, radiance, V, N);\n" +
+                    "        }\n" +
+                    "    }\n" +
+                    "    \n" +
+                    "    // 加入全局环境光\n" +
+                    "    Lo += ambientTotal;\n" +
+                    "\n" +
+                    "    // 3. 自发光 (Emissive) 处理\n" +
+                    "    if (u_IsEmissive > 0.5) {\n" +
+                    "        // 基础自发光颜色\n" +
+                    "        vec3 emissive = u_EmissiveColor * u_EmissiveIntensity;\n" +
+                    "        // 保留你原本特色的菲涅尔边缘泛光效果\n" +
+                    "        float fresnel = pow(1.0 - max(dot(N, V), 0.0), 2.5);\n" +
+                    "        emissive += mix(vec3(0.0), vec3(1.5, 1.5, 1.2) * u_EmissiveIntensity, fresnel);\n" +
+                    "        \n" +
+                    "        // 叠加到总光亮度中\n" +
+                    "        Lo += emissive;\n" +
                     "    }\n" +
                     "\n" +
                     "    Lo = finalizeColor(Lo);\n" +
@@ -125,9 +176,7 @@ public class StandardShader extends GLShader {
                     "}";
 
     public StandardShader() {
-        super("StandardShader",
-                VERTEX_SRC,
-                FRAGMENT_TEMPLATE);
+        super("StandardShader", VERTEX_SRC, FRAGMENT_TEMPLATE);
     }
 
     public void setBones(Matrix4f[] bones) {
@@ -142,9 +191,24 @@ public class StandardShader extends GLShader {
         }
     }
 
-    public void setEmissive(boolean emissive) {
+    /**
+     * 高级自发光控制
+     * @param emissive 是否开启自发光
+     * @param color 自发光颜色 (RGB)
+     * @param intensity 发光强度 (例如 1.0 到 50.0+)
+     */
+    public void setEmissive(boolean emissive, Vector3f color, float intensity) {
         this.bind();
         this.setUniform("u_IsEmissive", emissive ? 1.0f : 0.0f);
+        if (emissive) {
+            this.setUniform("u_EmissiveColor", color);
+            this.setUniform("u_EmissiveIntensity", intensity);
+        }
+    }
+
+    // 兼容旧版的调用
+    public void setEmissive(boolean emissive) {
+        setEmissive(emissive, new Vector3f(1.0f, 1.0f, 1.0f), 2.0f);
     }
 
     public void setup(Matrix4f viewProj, Matrix4f model, Color color) {
@@ -159,12 +223,22 @@ public class StandardShader extends GLShader {
         this.bind();
         this.setUniform("u_ViewPos", viewPos);
         int count = Math.min(lights.size(), MAX_LIGHTS);
-        this.setUniform("u_LightCount", (float) count);
+        this.setUniform("u_LightCount", count);
+
         for (int i = 0; i < count; i++) {
             GLLight l = lights.get(i);
-            this.setUniform("u_LightPos[" + i + "]", l.getPosition());
-            this.setUniform("u_LightColor[" + i + "]", l.getColor());
-            this.setUniform("u_LightIntensity[" + i + "]", l.getIntensity());
+            String prefix = "u_Lights[" + i + "].";
+
+            // 绑定光源的所有属性
+            this.setUniform(prefix + "type", l.getType());
+            this.setUniform(prefix + "position", l.getPosition());
+            this.setUniform(prefix + "direction", l.getDirection());
+            this.setUniform(prefix + "color", l.getColor());
+            this.setUniform(prefix + "intensity", l.getIntensity());
+            this.setUniform(prefix + "range", l.getRange());
+            this.setUniform(prefix + "innerCutOff", l.getInnerCutOff());
+            this.setUniform(prefix + "outerCutOff", l.getOuterCutOff());
+            this.setUniform(prefix + "ambientStrength", l.getAmbientStrength());
         }
     }
 

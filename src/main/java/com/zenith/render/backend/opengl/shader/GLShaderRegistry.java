@@ -1,5 +1,7 @@
 package com.zenith.render.backend.opengl.shader;
 
+import com.zenith.common.utils.InternalLogger;
+
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -9,7 +11,6 @@ import java.util.function.Supplier;
  */
 public class GLShaderRegistry {
     private static final Map<String, GLShader> SHADER_CACHE = new HashMap<>();
-
     public static final String STANDARD = "standard";
     public static final String IMAGE = "image";
     public static final String UI_DEFAULT = "ui_default";
@@ -49,7 +50,7 @@ public class GLShaderRegistry {
     public static <T extends GLShader> T get(String name) {
         GLShader shader = SHADER_CACHE.get(name);
         if (shader == null) {
-            System.err.println("Shader not found in registry: " + name);
+            InternalLogger.error("Shader not found in registry: " + name);
         }
         return (T) shader;
     }
@@ -72,6 +73,6 @@ public class GLShaderRegistry {
             }
         }
         SHADER_CACHE.clear();
-        System.out.println("All shaders disposed from registry.");
+        InternalLogger.info("All shaders disposed from registry.");
     }
 }

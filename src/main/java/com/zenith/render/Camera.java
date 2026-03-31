@@ -44,4 +44,12 @@ public abstract class Camera {
     public Projection getProjection() {
         return projection;
     }
+
+    public Vector3f getForward() {
+        return transform.getForward();
+    }
+
+    public Vector3f getUp() {
+        return transform.getUp();
+    }
 }

@@ -129,4 +129,16 @@ public class Transform {
         Matrix4f currentModel = getModelMatrix();
         return dest.set(currentModel);
     }
+
+    public Vector3f getForward() {
+        return rotation.transform(new Vector3f(0, 0, -1));
+    }
+
+    public Vector3f getUp() {
+        return rotation.transform(new Vector3f(0, 1, 0));
+    }
+
+    public Vector3f getRight() {
+        return rotation.transform(new Vector3f(1, 0, 0));
+    }
 }
