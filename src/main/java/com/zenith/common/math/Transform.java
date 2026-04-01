@@ -141,4 +141,8 @@ public class Transform {
     public Vector3f getRight() {
         return rotation.transform(new Vector3f(1, 0, 0));
     }
+
+    public void setDirty() {
+        this.dirty = true;
+    }
 }

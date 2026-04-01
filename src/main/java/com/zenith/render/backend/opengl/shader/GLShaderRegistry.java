@@ -20,7 +20,7 @@ public class GLShaderRegistry {
     public static final String EMISSIVE = "emissive";
     public static final String WATER = "water";
     public static final String SKY = "sky";
-
+    public static final String ANIMATION = "animation";
     static {
         register(STANDARD, new StandardShader());
         register(IMAGE, new ImageShader());
@@ -31,6 +31,7 @@ public class GLShaderRegistry {
         register(EMISSIVE, new EmissiveShader());
         register(WATER, new WaterShader());
         register(SKY, new SkyShader());
+        register(ANIMATION, new AnimationShader());
     }
 
     /**

@@ -38,6 +38,18 @@ public class VertexLayout {
                 name, count, attr.offset));
     }
 
+    public void pushInt(String name, int count) {
+        // 0x1404 是 OpenGL 中 GL_INT 的标准常量值
+        VertexAttribute attr = new VertexAttribute(name, count, 0x1404, false);
+        attr.offset = stride;
+
+        attributes.add(attr);
+        stride += count * 4; // 每个 int 4 字节
+
+        InternalLogger.debug(String.format("VertexLayout: Added Int '%s' (count: %d, offset: %d)",
+                name, count, attr.offset));
+    }
+
     public List<VertexAttribute> getAttributes() {
         return attributes;
     }

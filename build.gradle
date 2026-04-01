@@ -35,10 +35,10 @@ repositories {
 }
 
 dependencies {
-    // --- 1. 数学库 (JOML) ---
+    // --- 数学库 (JOML) ---
     implementation "org.joml:joml:${jomlVersion}"
 
-    // --- 2. 渲染与核心 (LWJGL) ---
+    // --- 渲染与核心 (LWJGL) ---
     implementation platform("org.lwjgl:lwjgl-bom:$lwjglVersion")
     implementation "org.lwjgl:lwjgl"
     implementation "org.lwjgl:lwjgl-glfw"
@@ -53,18 +53,21 @@ dependencies {
     runtimeOnly "org.lwjgl:lwjgl-stb::${project.lwjglNatives}"
     runtimeOnly "org.lwjgl:lwjgl-assimp::${project.lwjglNatives}"
 
-    // --- 3. 物理引擎 (NVIDIA PhysX JNI) ---
+    // --- 物理引擎 (NVIDIA PhysX JNI) ---
     implementation "de.fabmax:physx-jni:${physxVersion}"
     runtimeOnly "de.fabmax:physx-jni:${physxVersion}:${project.physxNatives}"
     implementation "org.slf4j:slf4j-api:${slf4jVersion}"
     implementation "ch.qos.logback:logback-classic:${logbackVersion}"
 
-    // --- 5. 脚本与工具 ---
+    // --- 脚本与工具 ---
     implementation 'org.graalvm.js:js:23.0.1'
     implementation 'org.graalvm.js:js-scriptengine:23.0.1'
     implementation 'io.github.classgraph:classgraph:4.8.165'
 
-    // --- 6. 测试 ---
+    // --- 用于解析 JSON 数据
+    implementation 'com.google.code.gson:gson:2.10.1'
+
+    // --- 测试 ---
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
