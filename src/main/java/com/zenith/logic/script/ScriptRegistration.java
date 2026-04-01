@@ -32,7 +32,8 @@ public class ScriptRegistration {
         registerPackages(manager, List.of(
                 "org.lwjgl",
                 "org.joml",
-                "de.fabmax.physxjni"
+                "de.fabmax.physxjni",
+                "com.zenith.animation"
         ));
         manager.registerClass("ZenithEngine", ZenithEngine.class);
     }
