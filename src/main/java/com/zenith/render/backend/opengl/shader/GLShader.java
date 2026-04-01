@@ -4,6 +4,7 @@ import com.zenith.asset.AssetResource;
 import com.zenith.common.math.Color;
 import com.zenith.common.utils.InternalLogger;
 import com.zenith.render.Shader;
+import com.zenith.render.backend.opengl.LightManager;
 import org.joml.Matrix4f;
 import org.joml.Vector2f;
 import org.joml.Vector3f;

@@ -2,10 +2,8 @@ package com.zenith.render.backend.opengl.shader;
 
 import com.zenith.common.math.Color;
 import com.zenith.render.backend.opengl.texture.GLTexture;
-import org.joml.Matrix4f;
-import org.joml.Vector2f;
-import org.joml.Vector3f;
-import org.joml.Vector4f;
+import org.joml.*;
+import com.zenith.render.backend.opengl.LightManager;
 
 public class WaterShader extends GLShader {
 
@@ -37,16 +35,33 @@ public class WaterShader extends GLShader {
 
     private static final String FRAGMENT_SRC =
             "#version 330 core\n" +
+                    "\n" +
+                    "// 结构体必须与 LightManager 传参完全一致\n" +
+                    "struct Light {\n" +
+                    "    float type;\n" +
+                    "    vec3 position;\n" +
+                    "    vec3 direction;\n" +
+                    "    vec4 color;\n" +
+                    "    float intensity;\n" +
+                    "    float range;\n" +
+                    "    float innerCutOff;\n" +
+                    "    float outerCutOff;\n" +
+                    "    float ambientStrength;\n" +
+                    "};\n" +
+                    "\n" +
+                    "uniform float u_LightCount;\n" + // 改为 float
+                    "uniform Light u_Lights[16];\n" +
+                    "uniform vec2 u_ScreenSize;\n" +
+                    "\n" +
                     "#include \"water.glsl\"\n" +
+                    "#include \"lighting.glsl\"\n" +
+                    "\n" +
                     "in vec3 vWorldPos;\n" +
                     "in vec2 vTexCoord;\n" +
                     "in mat3 vTBN;\n" +
                     "out vec4 FragColor;\n" +
+                    "\n" +
                     "uniform vec3 u_ViewPos;\n" +
-                    "uniform vec3 u_LightDir;\n" +
-                    "uniform vec3 u_LightIntensity;\n" +
-                    "uniform vec3 u_DeepColor;\n" +
-                    "uniform vec3 u_ShallowColor;\n" +
                     "uniform float u_Time;\n" +
                     "uniform float u_RainIntensity;\n" +
                     "uniform float u_NormalScale;\n" +
@@ -54,107 +69,47 @@ public class WaterShader extends GLShader {
                     "uniform sampler2D u_WaterNormalTex;\n" +
                     "uniform int u_HasNormalMap;\n" +
                     "\n" +
-                    "vec2 hash2(vec2 p) {\n" +
-                    "    p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));\n" +
-                    "    return fract(sin(p) * 43758.5453123);\n" +
-                    "}\n" +
-                    "\n" +
-                    "float stylizedWaterRipple(vec2 uv, float time) {\n" +
-                    "    vec2 i = floor(uv);\n" +
-                    "    vec2 f = fract(uv);\n" +
-                    "    float minDist = 1.0;\n" +
-                    "    for (int y = -1; y <= 1; y++) {\n" +
-                    "        for (int x = -1; x <= 1; x++) {\n" +
-                    "            vec2 neighbor = vec2(float(x), float(y));\n" +
-                    "            vec2 point = hash2(i + neighbor);\n" +
-                    "            point = 0.5 + 0.5 * sin(time * 1.5 + 6.2831 * point);\n" +
-                    "            vec2 diff = neighbor + point - f;\n" +
-                    "            minDist = min(minDist, length(diff));\n" +
-                    "        }\n" +
-                    "    }\n" +
-                    "    return minDist;\n" +
-                    "}\n" +
-                    "\n" +
-                    "float getRainRings(vec2 uv, float time) {\n" +
-                    "    vec2 id = floor(uv);\n" +
-                    "    vec2 f = fract(uv);\n" +
-                    "    float r = 0.0;\n" +
-                    "    for (int y = -1; y <= 1; y++) {\n" +
-                    "        for (int x = -1; x <= 1; x++) {\n" +
-                    "            vec2 offset = vec2(float(x), float(y));\n" +
-                    "            vec2 h = hash2(id + offset);\n" +
-                    "            vec2 center = offset + h;\n" +
-                    "            float dist = length(f - center);\n" +
-                    "            float phase = fract(time * 1.2 + h.x * 10.0);\n" +
-                    "            float ring = smoothstep(0.0, 0.05, phase - dist) * smoothstep(0.0, 0.05, dist - (phase - 0.08));\n" +
-                    "            r += ring * (1.0 - phase);\n" +
-                    "        }\n" +
-                    "    }\n" +
-                    "    return r;\n" +
-                    "}\n" +
-                    "\n" +
                     "void main() {\n" +
                     "    vec2 screenUV = gl_FragCoord.xy / u_ScreenSize;\n" +
                     "    vec3 V = normalize(u_ViewPos - vWorldPos);\n" +
-                    "    vec3 L = normalize(u_LightDir);\n" +
                     "    vec3 tangentNormal = vec3(0.0, 0.0, 1.0);\n" +
                     "\n" +
                     "    if (u_HasNormalMap == 1) {\n" +
-                    "        vec2 flow1 = vec2(0.015, 0.010) * u_Time;\n" +
-                    "        vec2 flow2 = vec2(-0.020, 0.015) * u_Time;\n" +
-                    "        vec2 uv1 = vWorldPos.xz * u_NormalScale + flow1;\n" +
-                    "        vec2 uv2 = vWorldPos.xz * (u_NormalScale * 2.0) + flow2;\n" +
-                    "        vec3 n1 = texture(u_WaterNormalTex, uv1).rgb * 2.0 - 1.0;\n" +
-                    "        vec3 n2 = texture(u_WaterNormalTex, uv2).rgb * 2.0 - 1.0;\n" +
-                    "        tangentNormal = normalize(n1 + n2);\n" +
+                    "        vec2 flow = vec2(0.02, 0.01) * u_Time;\n" +
+                    "        vec3 n = texture(u_WaterNormalTex, vWorldPos.xz * u_NormalScale + flow).rgb * 2.0 - 1.0;\n" +
+                    "        tangentNormal = normalize(n);\n" +
                     "        tangentNormal.xy *= u_NormalStrength;\n" +
-                    "    } else {\n" +
-                    "        vec2 e = vec2(0.06, 0.0);\n" +
-                    "        float h0 = stylizedWaterRipple(vWorldPos.xz * 0.45, u_Time);\n" +
-                    "        float hx = stylizedWaterRipple(vWorldPos.xz * 0.45 + e.xy, u_Time);\n" +
-                    "        float hy = stylizedWaterRipple(vWorldPos.xz * 0.45 + e.yx, u_Time);\n" +
-                    "        tangentNormal = normalize(vec3((h0 - hx), (h0 - hy), 0.55));\n" +
-                    "        tangentNormal.xy *= u_NormalStrength * 2.0;\n" +
                     "    }\n" +
                     "\n" +
-                    "    if (u_RainIntensity > 0.0) {\n" +
-                    "        float rain = getRainRings(vWorldPos.xz * 4.0, u_Time);\n" +
-                    "        tangentNormal.xy += vec2(rain, -rain) * u_RainIntensity * 1.2;\n" +
-                    "    }\n" +
-                    "\n" +
-                    "    for (int i = 0; i < 4; i++) {\n" +
-                    "        vec4 splash = u_ActiveSplashes[i];\n" +
-                    "        if (splash.w >= 0.0) {\n" +
-                    "            vec2 dir = vWorldPos.xz - splash.xy;\n" +
-                    "            float dist = length(dir);\n" +
-                    "            if (dist < splash.z && dist > 0.0001) {\n" +
-                    "                float wave = sin((dist - u_Time * 3.0) * 15.0) * (1.0 - dist / splash.z);\n" +
-                    "                tangentNormal.xy += normalize(dir) * wave * splash.w * 0.75;\n" +
-                    "            }\n" +
-                    "        }\n" +
-                    "    }\n" +
-                    "\n" +
-                    "    tangentNormal = normalize(tangentNormal);\n" +
                     "    vec3 N = normalize(vTBN * tangentNormal);\n" +
                     "\n" +
                     "    WaterMaterial mat;\n" +
-                    "    mat.deepColor = u_DeepColor;\n" +
-                    "    mat.shallowColor = u_ShallowColor;\n" +
-                    "    mat.roughness = mix(0.015, 0.09, clamp(u_RainIntensity, 0.0, 1.0));\n" +
+                    "    mat.deepColor = vec3(0.02, 0.05, 0.08);\n" +
+                    "    mat.shallowColor = vec3(0.08, 0.12, 0.15);\n" +
+                    "    mat.roughness = 0.05;\n" +
                     "    mat.clarity = 1.0;\n" +
                     "    mat.rainIntensity = u_RainIntensity;\n" +
-                    "    mat.foamColor = vec3(0.92, 0.96, 1.0);\n" +
+                    "    mat.foamColor = vec3(0.92);\n" +
                     "\n" +
-                    "    vec3 color = shadeWaterPBR(vWorldPos, V, L, N, u_LightIntensity, mat, u_Time, screenUV);\n" +
-                    "    color = (color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14);\n" +
+                    "    vec3 color = vec3(0.0);\n" +
+                    "    int count = int(u_LightCount);\n" +
                     "\n" +
-                    "    // Fresnel 控制透明度\n" +
+                    "    for (int i = 0; i < count; i++) {\n" +
+                    "        vec3 L; vec3 radiance;\n" +
+                    "        // 确保你的 lighting.glsl 中 computeLight 接受 float 类型的 Light 结构体\n" +
+                    "        computeLight(u_Lights[i], vWorldPos, L, radiance);\n" +
+                    "        color += shadeWaterPBR(vWorldPos, V, L, N, radiance, mat, u_Time, screenUV);\n" +
+                    "    }\n" +
+                    "\n" +
+                    "    // Tone mapping\n" +
+                    "    color = (color * (2.51 * color + 0.03)) /\n" +
+                    "            (color * (2.43 * color + 0.59) + 0.14);\n" +
+                    "\n" +
                     "    float NoV = clamp(dot(N, V), 0.001, 1.0);\n" +
-                    "    float F0 = 0.02;\n" +
-                    "    float fresnel = F0 + (1.0 - F0) * pow(1.0 - NoV, 5.0);\n" +
+                    "    float fresnel = 0.02 + (1.0 - 0.02) * pow(1.0 - NoV, 5.0);\n" +
                     "    float alpha = mix(0.92, 1.0, fresnel);\n" +
                     "\n" +
-                    "    FragColor = vec4(pow(color, vec3(1.0 / 2.2)), alpha);\n" +
+                    "    FragColor = vec4(pow(max(color, 0.0), vec3(1.0/2.2)), alpha);\n" +
                     "}";
 
     public WaterShader() {
@@ -162,18 +117,29 @@ public class WaterShader extends GLShader {
         bind();
         setUniform("u_NormalScale", 0.06f);
         setUniform("u_NormalStrength", 0.5f);
+        setUniform("u_ScreenSize", new Vector2f(1920, 1080)); // 默认值
     }
 
-    public void setMatrices(Matrix4f projection, Matrix4f view) {
-        setUniform("u_Projection", projection);
-        setUniform("u_View", view);
+    /**
+     * ⭐ 关键修复：应用光照
+     * 直接利用 LightManager 的逻辑，但 LightManager 内部已经做了 float 转换
+     */
+    public void applyLights(LightManager lm, Vector3f viewPos) {
+        this.bind();
+        lm.apply(this, viewPos);
     }
+
+    // =========================
+    // 接口优化
+    // =========================
 
     public void setScreenSize(int w, int h) {
-        setUniform("u_ScreenSize", new Vector2f(w, h));
+        this.bind();
+        setUniform("u_ScreenSize", new Vector2f((float)w, (float)h));
     }
 
     public void bindWaterNormal(GLTexture normalTex) {
+        this.bind();
         if (normalTex != null && normalTex.getId() != 0) {
             normalTex.bind(2);
             setUniform("u_WaterNormalTex", 2);
@@ -184,10 +150,12 @@ public class WaterShader extends GLShader {
     }
 
     public void setRainIntensity(float intensity) {
+        this.bind();
         setUniform("u_RainIntensity", intensity);
     }
 
     public void setSplashes(Vector4f[] splashes) {
+        this.bind();
         for (int i = 0; i < 4; i++) {
             String name = "u_ActiveSplashes[" + i + "]";
             if (splashes != null && i < splashes.length && splashes[i] != null) {
@@ -198,11 +166,9 @@ public class WaterShader extends GLShader {
         }
     }
 
-    public void updateUniforms(Vector3f viewPos, Vector3f lightDir, Vector3f lightIntensity,
-                               Color deep, Color shallow, float time, float rain) {
+    public void updateUniforms(Vector3f viewPos, Color deep, Color shallow, float time, float rain) {
+        this.bind();
         setUniform("u_ViewPos", viewPos);
-        setUniform("u_LightDir", lightDir);
-        setUniform("u_LightIntensity", lightIntensity);
         setUniform("u_DeepColor", new Vector3f(deep.r, deep.g, deep.b));
         setUniform("u_ShallowColor", new Vector3f(shallow.r, shallow.g, shallow.b));
         setUniform("u_Time", time);

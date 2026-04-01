@@ -62,7 +62,7 @@ public class TestLightSystem {
             shader.bind();
             shader.setBones(null);
             shader.setUseTexture(false);
-            shader.setEmissive(false);
+            //shader.setEmissive(false);
 
             shader.clearLights();
             shader.addLight(ambient);

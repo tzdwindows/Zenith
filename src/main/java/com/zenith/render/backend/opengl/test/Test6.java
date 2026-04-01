@@ -142,7 +142,7 @@ public class Test6 {
             glDisable(GL_BLEND); // 重点：水面靠折射，不要开 Alpha 混合！
 
             waterShader.bind();
-            waterShader.setMatrices(proj, view);
+            //waterShader.setMatrices(proj, view);
             waterShader.setUniform("u_ViewProjection", new Matrix4f(proj).mul(view));
             waterShader.setUniform("u_Model", new Matrix4f().translation(0, 0, 0));
             waterShader.setScreenSize(winWidth, winHeight);
@@ -153,13 +153,12 @@ public class Test6 {
             // 使用新封装的 Uniform 方法
             waterShader.updateUniforms(
                     camPos,
-                    sunDir,
-                    lightIntensity,
                     new Color(0.01f, 0.05f, 0.12f), // 深水颜色
                     new Color(0.1f, 0.45f, 0.6f),   // 浅水颜色
                     time,
                     0.9f // 下雨强度非常大
             );
+            waterShader.applyLights(LightManager.get(), camPos);
             waterShader.setSplashes(splashData);
             waterMesh.render();
 

@@ -6,6 +6,7 @@ import com.zenith.render.VertexLayout;
 import com.zenith.render.backend.opengl.GLWindow;
 import com.zenith.render.backend.opengl.GLMaterial;
 import com.zenith.render.backend.opengl.GLMesh;
+import com.zenith.render.backend.opengl.LightManager;
 import com.zenith.render.backend.opengl.shader.*;
 import com.zenith.common.math.Color;
 import com.zenith.render.backend.opengl.texture.GLTexture;
@@ -283,7 +284,7 @@ public class Test extends ZenithEngine {
         if (waterEntity == null || sceneFBO == null) return;
 
         waterShader.bind();
-        waterShader.setMatrices(projMatrix, viewMatrix);
+        //waterShader.setMatrices(projMatrix, viewMatrix);
         waterShader.setUniform("u_ViewProjection", new Matrix4f(projMatrix).mul(viewMatrix));
         waterShader.setUniform("u_Model", new Matrix4f().translate(0, 50, 0));
         waterShader.setScreenSize(window.getWidth(), window.getHeight());
@@ -300,14 +301,14 @@ public class Test extends ZenithEngine {
         waterShader.bindWaterNormal(waterNormal);
 
         waterShader.updateUniforms(
-                camPosCached,
-                sunDir,
-                sunIntensityVec,
-                new Color(0.01f, 0.05f, 0.12f),
-                new Color(0.1f, 0.5f, 0.65f),
-                time,
-                0.0f
+                camPosCached,                  // 摄像机位置
+                new Color(0.01f, 0.05f, 0.12f), // 深水颜色
+                new Color(0.1f, 0.5f, 0.65f),  // 浅水颜色
+                time,                          // 时间
+                0.0f                           // 雨水强度
         );
+
+        waterShader.applyLights(LightManager.get(), camPosCached);
 
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);

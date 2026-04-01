@@ -1,10 +1,13 @@
 #ifndef ZENITH_TERRAIN_SYSTEM_GLSL
 #define ZENITH_TERRAIN_SYSTEM_GLSL
 
-#include "../filament/common_math.glsl"
-#include "../filament/brdf.glsl"
+#include "../psrdnoise/psrdnoise3.glsl"
 
-// 1. 必须在包含 surface_shading.glsl 之前定义 PBRParams
+const float ZENITH_PI = 3.14159265359;
+
+// ==========================
+// PBR 参数
+// ==========================
 struct PBRParams {
     vec3  diffuseColor;
     vec3  f0;
@@ -12,28 +15,51 @@ struct PBRParams {
     float metallic;
 };
 
-#include "../filament/surface_shading.glsl"
-#include "../psrdnoise/psrdnoise3.glsl"
-
+// ==========================
+// 地形材质
+// ==========================
 struct TerrainMaterial {
     float hasGrassMap;
     float hasRockMap;
     float hasNormalMap;
     float uvScale;
 
-    vec3  grassColor;
-    vec3  rockColor;
-    vec3  snowColor;
+    vec3 grassColor;
+    vec3 rockColor;
+    vec3 snowColor;
 
     float amplitude;
     float frequency;
     float snowHeight;
 };
 
-// ==========================================
-// 1. 程序化地形高度 + 法线 (保持不变)
-// ==========================================
-void computeTerrainHeightAndNormal(vec2 worldPosXZ, TerrainMaterial mat, out float outHeight, out vec3 outNormal) {
+// ==========================
+// 光源
+// ==========================
+struct Light {
+    float type;              // 0=directional, 1=point, 2=spot
+    vec3 position;
+    vec3 direction;
+    vec4 color;
+    float intensity;
+    float range;
+    float innerCutOff;
+    float outerCutOff;
+    float ambientStrength;
+};
+
+uniform Light u_Lights[16];
+uniform float u_LightCount;
+
+// ==========================
+// 地形高度 + 法线
+// ==========================
+void computeTerrainHeightAndNormal(
+vec2 worldPosXZ,
+TerrainMaterial mat,
+out float outHeight,
+out vec3 outNormal
+) {
     float elevation = 0.0;
     float amp = mat.amplitude;
     float freq = mat.frequency;
@@ -55,107 +81,125 @@ void computeTerrainHeightAndNormal(vec2 worldPosXZ, TerrainMaterial mat, out flo
     outNormal = normalize(vec3(-dndx.x, 1.0, -dndx.y));
 }
 
-float computeTerrainHeight(vec2 worldPosXZ, TerrainMaterial mat) {
-    float h; vec3 n;
-    computeTerrainHeightAndNormal(worldPosXZ, mat, h, n);
-    return h;
+// ==========================
+// 衰减
+// ==========================
+float calculateAttenuation(float dist, float range) {
+    float distSq = dist * dist;
+    float att = 1.0 / max(distSq, 0.0001);
+
+    float factor = dist / max(range, 0.001);
+    float window = clamp(1.0 - pow(factor, 4.0), 0.0, 1.0);
+
+    return att * window * window;
 }
 
-// ==========================================
-// 2. 大气环境光 (保持不变)
-// ==========================================
-vec3 evaluateAtmosphericAmbient(vec3 N, vec3 lightDir) {
-    float sunY = lightDir.y;
-    vec3 nightSky   = vec3(0.01, 0.02, 0.05);
-    vec3 sunsetSky  = vec3(0.60, 0.30, 0.15);
-    vec3 daySky     = vec3(0.15, 0.30, 0.60);
-    vec3 skyColor = (sunY < 0.0) ? mix(nightSky, sunsetSky, smoothstep(-0.2, 0.0, sunY))
-    : mix(sunsetSky, daySky, smoothstep(0.0, 0.3, sunY));
-    float skyWeight = mix(0.3, 1.0, max(0.0, N.y));
-    float timeBrightness = mix(0.05, 1.0, smoothstep(-0.2, 0.2, sunY));
-    float nightAtten = smoothstep(-0.05, -0.3, sunY);
-    vec3 moonAmbient = vec3(0.02, 0.04, 0.08) * smoothstep(0.0, -0.2, sunY);
-    return ((skyColor * skyWeight * timeBrightness) * (1.0 - nightAtten)) + moonAmbient;
+// ==========================
+// 轻量 PBR BRDF
+// ==========================
+vec3 surfaceShading(PBRParams pixel, vec3 L, vec3 radiance, vec3 V, vec3 N) {
+    vec3 H = normalize(V + L);
+
+    float NdotL = max(dot(N, L), 0.0);
+    float NdotV = max(dot(N, V), 0.0);
+    float NdotH = max(dot(N, H), 0.0);
+    float VdotH = max(dot(V, H), 0.0);
+
+    if (NdotL <= 0.0 || NdotV <= 0.0) {
+        return vec3(0.0);
+    }
+
+    float roughness = clamp(pixel.roughness, 0.05, 1.0);
+    float a = roughness * roughness;
+    float a2 = a * a;
+
+    float denom = max((NdotH * NdotH) * (a2 - 1.0) + 1.0, 1e-4);
+    float D = a2 / (ZENITH_PI * denom * denom);
+
+    float k = (roughness + 1.0);
+    k = (k * k) / 8.0;
+
+    float Gv = NdotV / (NdotV * (1.0 - k) + k);
+    float Gl = NdotL / (NdotL * (1.0 - k) + k);
+    float G = Gv * Gl;
+
+    vec3 F0 = mix(pixel.f0, pixel.diffuseColor, pixel.metallic);
+    vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
+
+    vec3 spec = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-4);
+    vec3 kd = (1.0 - F) * (1.0 - pixel.metallic);
+    vec3 diff = kd * pixel.diffuseColor / ZENITH_PI;
+
+    return (diff + spec) * radiance * NdotL;
 }
 
-// ==========================================
-// 3. 地形材质混合 (保持不变)
-// ==========================================
-void evaluateTerrainMaterial(
+// ==========================
+// 多光源照明
+// ==========================
+vec3 evaluateLights(PBRParams pixel, vec3 N, vec3 V, vec3 worldPos) {
+    vec3 Lo = vec3(0.0);
+    vec3 ambient = vec3(0.0);
+
+    // 【修改点】将 u_LightCount 转回 int 用于循环
+    int count = int(u_LightCount);
+
+    for (int i = 0; i < count; i++) {
+        Light light = u_Lights[i];
+
+        vec3 L = vec3(0.0);
+        float attenuation = 1.0;
+
+        // 【修改点】使用 float 范围判断 type
+        if (light.type < 0.5) {
+            // 相当于 == 0 (Directional)
+            L = normalize(-light.direction);
+            ambient += pixel.diffuseColor * light.color.rgb * light.ambientStrength;
+        } else {
+            // Point 或 Spot
+            vec3 lightVec = light.position - worldPos;
+            float dist = length(lightVec);
+            if (dist < 1e-4) {
+                continue;
+            }
+
+            L = lightVec / dist;
+            attenuation = calculateAttenuation(dist, light.range);
+            if (light.type > 1.5) {
+                float theta = dot(L, normalize(-light.direction));
+                float epsilon = max(light.innerCutOff - light.outerCutOff, 1e-4);
+                float spot = clamp((theta - light.outerCutOff) / epsilon, 0.0, 1.0);
+                attenuation *= spot;
+            }
+        }
+
+        // 【修改点】判断是否是平行光或者衰减 > 0
+        if (attenuation > 0.0 || light.type < 0.5) {
+            vec3 radiance = light.color.rgb * light.intensity * attenuation;
+            Lo += surfaceShading(pixel, L, radiance, V, N);
+        }
+    }
+
+    return Lo + ambient;
+}
+
+
+// ==========================
+// 地形专用入口
+// ==========================
+vec3 shadeTerrainMultiLight(
 vec3 worldPos,
-vec3 normal,
-TerrainMaterial mat,
-out vec3 outAlbedo,
-out float outRoughness,
-out float outGrassMask
+vec3 V,
+vec3 N,
+vec3 albedo,
+float roughness
 ) {
-    float slope = 1.0 - normal.y;
-    float rockWeight = smoothstep(0.15, 0.35, slope);
-    float heightWeight = smoothstep(mat.snowHeight - 2.0, mat.snowHeight + 2.0, worldPos.y);
-    float snowSlopeRetain = 1.0 - smoothstep(0.35, 0.55, slope);
-    float snowWeight = heightWeight * snowSlopeRetain;
+    PBRParams p;
+    p.diffuseColor = albedo;
+    p.f0 = vec3(0.04);
+    p.roughness = clamp(roughness, 0.05, 1.0);
+    p.metallic = 0.0;
 
-    vec3 albedo = mix(mat.grassColor, mat.rockColor, rockWeight);
-    albedo = mix(albedo, mat.snowColor, snowWeight);
-    float roughness = mix(0.85, 0.65, rockWeight);
-    roughness = mix(roughness, 0.45, snowWeight);
-
-    outGrassMask = (1.0 - rockWeight) * (1.0 - snowWeight);
-    outAlbedo = albedo;
-    outRoughness = roughness;
+    return evaluateLights(p, N, V, worldPos);
 }
-
-// ==========================================
-// 4. 修改后的核心 PBR 着色
-// ==========================================
-vec3 shadeTerrain(
-vec3 worldPos,
-vec3 viewDir,
-vec3 lightDir,
-vec3 lightIntensity,
-TerrainMaterial mat,
-vec3 finalAlbedo,
-vec3 finalNormal,
-float finalRoughness,
-float grassMask
-) {
-    vec3 N = normalize(finalNormal);
-    vec3 V = viewDir;
-    vec3 L = lightDir;
-
-    float NoV = clamp(dot(N, V), 0.001, 1.0);
-    // 【修复1】将下限从 0.0 改为 0.001，防止 Filament BRDF 内部除以 0 导致 NaN (死黑)
-    float NoL = clamp(dot(N, L), 0.001, 1.0);
-
-    // 1. 初始化 PBR 参数
-    PBRParams pixel;
-    pixel.diffuseColor = finalAlbedo * 0.9;
-    pixel.f0           = vec3(0.04);
-    pixel.roughness    = clamp(finalRoughness, 0.05, 1.0);
-    pixel.metallic     = 0.0;
-
-    // 2. 直接光着色
-    vec3 directLighting = surfaceShading(pixel, L, lightIntensity, V, N);
-
-    // 3. 草地透射 (SSS)
-    float sheen = pow(1.0 - NoV, 3.0) * NoL * 0.2;
-    vec3 grassFuzz = finalAlbedo * sheen * grassMask * lightIntensity;
-    float sssFactor = pow(max(0.0, dot(V, -L)), 6.0) * (1.0 - NoV) * 0.1;
-    vec3 grassSSS = finalAlbedo * vec3(1.1, 1.1, 0.8) * sssFactor * lightIntensity * grassMask;
-
-    // 4. 环境光部分
-    float ambientAO = mix(0.4, 1.0, max(0.0, N.y) * 0.5 + 0.5); // 防止底部过暗
-    vec3 ambientLighting = finalAlbedo * evaluateAtmosphericAmbient(N, lightDir) * ambientAO;
-
-    // 5. 组合最终颜色 (HDR 线性空间)
-    vec3 finalColor = directLighting + grassFuzz + grassSSS + ambientLighting;
-
-    // 【修复2】删除此处的 Reinhard 和 Gamma，交给 Java 里的 Fragment Shader 统一处理！
-    // finalColor = finalColor / (finalColor + vec3(1.0));
-    // finalColor = pow(finalColor, vec3(1.0 / 2.2));
-
-    return finalColor;
-}
-
 
 #endif

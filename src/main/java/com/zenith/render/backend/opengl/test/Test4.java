@@ -115,7 +115,7 @@ public class Test4 {
             pbrShader.addLight(sunLight);
             pbrShader.addLight(fillLight);
             pbrShader.applyLights(camera.getTransform().getPosition());
-            pbrShader.setEmissive(false);
+            //pbrShader.setEmissive(false);
             pbrShader.setUseTexture(true);
             pbrShader.setup(viewProj, modelTransform.getModelMatrix(), new Color(1, 1, 1, 0.05f));
             model.draw();

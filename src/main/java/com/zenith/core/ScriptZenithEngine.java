@@ -31,11 +31,22 @@ public class ScriptZenithEngine extends ZenithEngine {
         this.resource.onUpdate(this::handleScriptReload);
     }
 
+    /**
+     * 【关键修复】：建立一个同步变量的方法，确保 JS 拿到的是最新的、非空的引用
+     */
+    private void syncScriptVariables() {
+        if (this.sceneFBO != null) {
+            scriptManager.setVariable("sceneFBO", this.sceneFBO);
+        } else {
+            InternalLogger.error("警告：尝试绑定脚本变量时 sceneFBO 仍为 null！");
+        }
+    }
+
     @Override
     protected void asyncLoad() {
         InternalLogger.info("正在后台编译 JS 脚本...");
         setLoadingProgress(0.1f);
-
+        syncScriptVariables();
         try {
             scriptManager.execute(resource);
             this.jsAsyncLoad = scriptManager.getGlobal("asyncLoad");
