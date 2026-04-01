@@ -9,14 +9,15 @@ import com.zenith.common.math.Transform;
 import com.zenith.common.utils.InternalLogger;
 import com.zenith.render.Window;
 import com.zenith.render.backend.opengl.GLCamera;
+import com.zenith.render.backend.opengl.GLLight;
 import com.zenith.render.backend.opengl.GLWindow;
 import com.zenith.render.backend.opengl.shader.AnimationShader;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
+import org.joml.Vector4f;
 
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.opengl.GL11.*;
-import static org.lwjgl.opengl.GL13.*; // 确保引入 GL13
 
 public class Test {
     private static float yaw = 0.0f;
@@ -29,9 +30,9 @@ public class Test {
     private static double lastFrameTime = 0.0;
 
     public static void main(String[] args) {
-        InternalLogger.info("Starting Zenith Skeletal Animation Test...");
+        InternalLogger.info("Starting Zenith Skeletal Animation & Lighting Test...");
 
-        GLWindow window = new GLWindow("Zenith Engine - Skeletal Animation Player", 1280, 720);
+        GLWindow window = new GLWindow("Zenith Engine - PBR Lighting & Animation Test", 1280, 720);
         window.init();
 
         GLCamera camera = new GLCamera();
@@ -76,48 +77,91 @@ public class Test {
         AnimationShader shader = new AnimationShader();
         glEnable(GL_DEPTH_TEST);
 
-        // 4. 加载资源
-        String modelPath = "F:\\glTF-Sample-Models-main\\2.0\\SimpleSkin\\glTF\\SimpleSkin.gltf";
+        // 1. 加载模型（建议使用带法线的模型以观察光照效果）
+        String modelPath = "F:\\glTF-Sample-Models-main\\2.0\\Fox\\glTF\\Fox.gltf";
         AnimatedModel animatedModel = AssimpModelLoader.load(modelPath);
-
-        // --- 修改 1：使用新的构造函数，自动同步贴图 ---
         Animator animator = new Animator(animatedModel);
-
         if (!animatedModel.getAllAnimations().isEmpty()) {
             String firstAnimName = animatedModel.getAllAnimations().keySet().iterator().next();
-            AnimationClip clip = animatedModel.getAnimation(firstAnimName);
-            InternalLogger.info("Now playing loop animation: " + firstAnimName);
-            animator.play(clip);
+            animator.play(animatedModel.getAnimation(firstAnimName));
             animator.setLooping(true);
         }
 
         Transform modelTransform = new Transform();
         lastFrameTime = glfwGetTime();
+
         while (!window.shouldClose()) {
             double currentTime = glfwGetTime();
             float deltaTime = (float) (currentTime - lastFrameTime);
             lastFrameTime = currentTime;
+
+            // --- 逻辑更新 ---
             animator.update(deltaTime);
+
+            // 相机轨道控制
             float camX = (float) (Math.cos(pitch) * Math.sin(yaw) * distance);
             float camY = (float) (Math.sin(pitch) * distance);
             float camZ = (float) (Math.cos(pitch) * Math.cos(yaw) * distance);
             camera.getTransform().setPosition(target.x + camX, target.y + camY, target.z + camZ);
             camera.lookAt(target, new Vector3f(0, 1, 0));
 
-            glClearColor(0.15f, 0.15f, 0.18f, 1.0f);
+            // --- 渲染开始 ---
+            // 背景深一点，更利于观察灯光
+            glClearColor(0.05f, 0.05f, 0.07f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-            Matrix4f viewProj = new Matrix4f(camera.getProjectionMatrix()).mul(camera.getViewMatrix());
             shader.bind();
-            animator.bind(0);
-            shader.setup(viewProj, modelTransform.getModelMatrix(), Color.WHITE);
+
+            // --- 灯光系统设置 ---
+            shader.clearLights();
+
+            // 1. 添加主方向光（类似太阳）
+            GLLight sun = new GLLight();
+            sun.setType(0); // Directional
+            sun.setDirection(new Vector3f(-1.0f, -1.0f, -1.0f));
+            sun.setColor(new Color(1.0f, 0.95f, 0.8f, 1.0f));
+            sun.setIntensity(1.2f);
+            sun.setAmbientStrength(0.1f); // 基础环境光，防止全黑
+            shader.addLight(sun);
+
+            // 2. 添加一个旋转的彩色点光源
+            float lightTime = (float) currentTime * 1.5f;
+            GLLight pointLight = new GLLight();
+            pointLight.setType(1); // Point
+            pointLight.setPosition(new Vector3f(
+                    (float) Math.sin(lightTime) * 3.0f,
+                    1.5f,
+                    (float) Math.cos(lightTime) * 3.0f
+            ));
+            pointLight.setColor(new Color(0.2f, 0.6f, 1.0f, 1.0f)); // 冰蓝色
+            pointLight.setIntensity(15.0f); // PBR 强度通常需要较高
+            pointLight.setRange(10.0f);
+            shader.addLight(pointLight);
+
+            // 3. 应用灯光和相机位置
+            shader.applyLights(camera.getTransform().getPosition());
+
+            // 4. 自发光测试：随时间脉冲式发光
+            float emissivePulse = (float) Math.abs(Math.sin(currentTime * 2.0));
+            shader.setEmissive(true, new Vector3f(1.0f, 0.3f, 0.1f), emissivePulse * 10.0f);
+
+            // --- 绘制模型 ---
+            Matrix4f viewProj = new Matrix4f(camera.getProjectionMatrix()).mul(camera.getViewMatrix());
+            animator.bind(0); // 绑定 UBO
+
+            // 这里 Color.WHITE 的 Alpha 频道在 Shader 中被我们作为 Metallic (金属度)
+            // 我们设置 Alpha 为 0.8，表示该模型非常接近金属，会有明显的反射感
+            modelTransform.setScale(0.5f);
+            shader.setup(viewProj, modelTransform.getModelMatrix(), new Color(1, 1, 1, 0.8f));
+            shader.setUseTexture(true); // 确保开启贴图
+
             animatedModel.getMesh().render();
 
             window.update();
         }
 
         animatedModel.dispose();
-        animator.dispose(); // 别忘了释放 animator 的内存
+        animator.dispose();
         window.dispose();
     }
 }
