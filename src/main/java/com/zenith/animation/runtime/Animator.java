@@ -9,6 +9,11 @@ import org.lwjgl.system.MemoryUtil;
 import java.nio.FloatBuffer;
 import java.util.List;                          // 新增导入
 
+import static org.lwjgl.opengl.ARBInternalformatQuery2.GL_TEXTURE_2D;
+import static org.lwjgl.opengl.GL11C.glBindTexture;
+import static org.lwjgl.opengl.GL13C.GL_TEXTURE0;
+import static org.lwjgl.opengl.GL13C.glActiveTexture;
+
 public class Animator {
     private final Skeleton skeleton;
     private final int numJoints;
@@ -33,6 +38,8 @@ public class Animator {
     private static final SamplingJob SAMPLER = new SamplingJob();
     private static final LocalToModelJob L2M = new LocalToModelJob();
     private static final SkinningMatrixJob SKINNER = new SkinningMatrixJob();
+
+    private static final int MAX_BONES = 100;
 
     /**
      * 推荐构造函数：直接传入 AnimatedModel
@@ -59,8 +66,11 @@ public class Animator {
             modelMatrices[i] = new Matrix4f();
         }
 
-        this.skinningBuffer = MemoryUtil.memAllocFloat(numJoints * 16);
-        this.gpuBuffer = new GLBoneBuffer(numJoints);
+        this.skinningBuffer = MemoryUtil.memAllocFloat(MAX_BONES * 16);
+        for(int i = 0; i < MAX_BONES; i++) {
+            new Matrix4f().get(i * 16, skinningBuffer);
+        }
+        this.gpuBuffer = new GLBoneBuffer(MAX_BONES);
     }
 
     // --- 新增：手动设置贴图的方法 ---
@@ -105,7 +115,13 @@ public class Animator {
     }
 
     public void update(float dt) {
-        if (currentClip == null) return;
+        // 如果没有动画，至少也要更新一次矩阵（确保模型以 T-Pose 显示）
+        if (currentClip == null) {
+            L2M.execute(skeleton, currentLocalPoses, modelMatrices);
+            SKINNER.execute(skeleton, modelMatrices, skinningBuffer);
+            gpuBuffer.update(skinningBuffer);
+            return;
+        }
 
         currentTime += dt * playbackSpeed;
 
@@ -119,6 +135,7 @@ public class Animator {
             }
         }
 
+        // --- 【修复】必须对当前剪辑进行采样，否则 currentLocalPoses 永远没数据 ---
         SAMPLER.execute(skeleton, currentClip, currentTime, currentLocalPoses);
 
         if (nextClip != null && totalBlendTime > 0) {
@@ -134,8 +151,11 @@ public class Animator {
             }
         }
 
+        // 计算全局变换和蒙皮矩阵
         L2M.execute(skeleton, currentLocalPoses, modelMatrices);
         SKINNER.execute(skeleton, modelMatrices, skinningBuffer);
+
+        // 更新 GPU 缓冲区
         gpuBuffer.update(skinningBuffer);
     }
 
@@ -153,20 +173,20 @@ public class Animator {
      * @param boneBufferSlot 骨骼数据所在的绑定点 (Binding Point)
      */
     public void bind(int boneBufferSlot) {
-        // 1. 绑定骨骼数据到指定的 Uniform/ShaderStorage Block 槽位
         gpuBuffer.bind(boneBufferSlot);
-
-        // 2. 自动绑定所有贴图到纹理单元 (Texture Unit)
-        // 通常：单元 0 为 Diffuse, 单元 1 为 Normal 等，取决于模型加载时的顺序
-        if (textures != null) {
+        if (textures != null && !textures.isEmpty()) {
             for (int i = 0; i < textures.size(); i++) {
                 Texture tex = textures.get(i);
                 if (tex != null) {
-                    tex.bind(i); // 将第 i 张贴图绑定到 GL_TEXTURE0 + i
+                    tex.bind(i);
                 }
             }
+        } else {
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, 0);
         }
     }
+
 
     public void setPlaybackSpeed(float speed) { this.playbackSpeed = speed; }
 

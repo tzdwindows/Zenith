@@ -6,22 +6,29 @@ import com.zenith.animation.data.AnimatedModel;
 import com.zenith.animation.runtime.AnimationClip;
 import com.zenith.animation.runtime.Keyframes;
 import com.zenith.animation.runtime.Skeleton;
+import com.zenith.asset.AssetIdentifier;
+import com.zenith.asset.AssetResource;
 import com.zenith.common.utils.InternalLogger;
 import com.zenith.render.Texture;
 import com.zenith.render.VertexLayout;
 import com.zenith.render.backend.opengl.animation.GLSkinnedMesh;
+import com.zenith.render.backend.opengl.texture.GLTexture;
 import org.joml.Matrix4f;
+import org.joml.Vector3f;
+import org.joml.Quaternionf;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.assimp.*;
+import org.lwjgl.system.MemoryUtil;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.util.*;
 
 import static org.lwjgl.assimp.Assimp.*;
-import static org.lwjgl.opengl.GL11.GL_INT;
 
 /**
  * 工业级动画模型加载器：支持自动识别 (.json) 或 3D 原始文件 (FBX, glTF, OBJ 等)。
@@ -51,7 +58,7 @@ public class AssimpModelLoader {
     }
 
     // ============================================================
-    // JSON 加载分支
+    // JSON 加载分支 (已完整实现)
     // ============================================================
 
     private static AnimatedModel loadFromJson(String path) {
@@ -70,12 +77,54 @@ public class AssimpModelLoader {
             int vertexCount = data.vertices.length / 16;
             GLSkinnedMesh mesh = new GLSkinnedMesh(vertexCount, layout);
             mesh.updateVertices(data.vertices);
-            // mesh.updateIndices(data.indices); // 需 GLMesh 支持
 
-            // 3. 重建 Animations (这里逻辑根据 AnimationClip 的具体实现调整)
+            // 注意：如果你的 JSON 里有 indices 数组，可以取消注释下面这行
+            if (data.indices != null && data.indices.length > 0) {
+                mesh.updateIndices(data.indices);
+            }
+
+            // 3. 重建 Animations
             Map<String, AnimationClip> animations = new HashMap<>();
-            // ... 解析逻辑 ...
+            if (data.animations != null) {
+                for (JsonModelData.JsonAnimation jAnim : data.animations) {
+                    List<AnimationClip.JointData> jointDataList = new ArrayList<>();
 
+                    for (JsonModelData.JsonJointData jData : jAnim.jointData) {
+                        AnimationClip.JointData jd = new AnimationClip.JointData();
+                        jd.jointIndex = jData.jointIndex;
+
+                        // 解析位移
+                        jd.translations = new Keyframes.TranslationKey[jData.translations.length];
+                        for (int i = 0; i < jData.translations.length; i++) {
+                            jd.translations[i] = new Keyframes.TranslationKey();
+                            jd.translations[i].time = jData.translations[i].time;
+                            jd.translations[i].value.set(jData.translations[i].value);
+                        }
+
+                        // 解析旋转
+                        jd.rotations = new Keyframes.RotationKey[jData.rotations.length];
+                        for (int i = 0; i < jData.rotations.length; i++) {
+                            jd.rotations[i] = new Keyframes.RotationKey();
+                            jd.rotations[i].time = jData.rotations[i].time;
+                            jd.rotations[i].value.set(jData.rotations[i].value);
+                        }
+
+                        // 解析缩放
+                        jd.scales = new Keyframes.ScaleKey[jData.scales.length];
+                        for (int i = 0; i < jData.scales.length; i++) {
+                            jd.scales[i] = new Keyframes.ScaleKey();
+                            jd.scales[i].time = jData.scales[i].time;
+                            jd.scales[i].value.set(jData.scales[i].value);
+                        }
+
+                        jointDataList.add(jd);
+                    }
+                    AnimationClip clip = new AnimationClip(jAnim.name, jAnim.duration, skeleton.numJoints(), jointDataList.toArray(new AnimationClip.JointData[0]));
+                    animations.put(jAnim.name, clip);
+                }
+            }
+
+            InternalLogger.info("Model " + data.modelName + " loaded successfully from JSON.");
             return new AnimatedModel(data.modelName, mesh, skeleton, animations);
         } catch (IOException e) {
             throw new RuntimeException("JSON loading failed: " + path, e);
@@ -90,7 +139,7 @@ public class AssimpModelLoader {
         AIScene scene = aiImportFile(resourcePath,
                 aiProcess_Triangulate |
                         aiProcess_GenSmoothNormals |
-                        aiProcess_FlipUVs |
+                        aiProcess_FlipUVs | // 这个必须有，配合 GLTexture 翻转
                         aiProcess_LimitBoneWeights |
                         aiProcess_JoinIdenticalVertices |
                         aiProcess_PopulateArmatureData
@@ -100,28 +149,24 @@ public class AssimpModelLoader {
             throw new RuntimeException("Assimp error: " + aiGetErrorString());
         }
 
-        String modelName = new java.io.File(resourcePath).getName();
-        File file = new File(resourcePath);
-        String modelDir = file.getParent();
+        String modelName = new File(resourcePath).getName();
+        String modelDir = new File(resourcePath).getParent();
 
-        // 1. 骨骼层级处理
         List<BoneData> boneList = new ArrayList<>();
         Map<String, Integer> boneMap = new HashMap<>();
         buildBoneHierarchy(scene, boneMap, boneList);
 
-        // 2. 顶点数据处理 (交织布局)
         GLSkinnedMesh mesh = loadMeshFromAssimp(scene, boneMap);
-
-        // 3. 运行时骨架创建
         Skeleton skeleton = createSkeletonFromBoneList(boneList);
 
-        // 4. 动画剪辑加载
         Map<String, AnimationClip> animations = loadAnimationsFromAssimp(scene, boneMap, skeleton.numJoints());
+
+        // 解析贴图 (现在传递了 scene 对象，以支持解析内嵌贴图)
+        List<Texture> textures = loadMaterials(scene, modelDir);
 
         aiReleaseImport(scene);
 
         InternalLogger.info("Model " + modelName + " loading completed.");
-        List<Texture> textures = loadMaterials(scene, modelDir);
         AnimatedModel model = new AnimatedModel(modelName, mesh, skeleton, animations);
         model.setTextures(textures);
         return model;
@@ -136,8 +181,8 @@ public class AssimpModelLoader {
 
         for (int i = 0; i < materialCount; i++) {
             AIMaterial material = AIMaterial.create(materialBuffer.get(i));
-            // 加载 Diffuse (漫反射) 贴图
-            Texture diffuseTex = loadTextureByType(material, aiTextureType_DIFFUSE, modelDir);
+            // 传入 scene 以便处理内嵌贴图 (Embedded textures)
+            Texture diffuseTex = loadTextureByType(scene, material, aiTextureType_DIFFUSE, modelDir);
             if (diffuseTex != null) {
                 textures.add(diffuseTex);
             }
@@ -145,7 +190,7 @@ public class AssimpModelLoader {
         return textures;
     }
 
-    private static com.zenith.render.Texture loadTextureByType(AIMaterial material, int textureType, String modelDir) {
+    private static Texture loadTextureByType(AIScene scene, AIMaterial material, int textureType, String modelDir) {
         AIString path = AIString.calloc();
         int result = aiGetMaterialTexture(material, textureType, 0, path, (IntBuffer) null, null, null, null, null, null);
 
@@ -155,38 +200,75 @@ public class AssimpModelLoader {
         }
 
         String textPath = path.dataString().replace("\\", "/");
-        java.io.File textureFile = new java.io.File(modelDir, textPath);
 
-        // 路径纠错
-        if (!textureFile.exists()) {
-            textureFile = new java.io.File(modelDir, new java.io.File(textPath).getName());
-        }
-
-        if (textureFile.exists()) {
+        // --- 核心修复：处理内嵌贴图 (Embedded Texture) ---
+        // 在 glTF / glb 模型中，贴图通常被打包在文件里，路径以 * 开头，后面跟着索引（例如 *0, *1）
+        if (textPath.startsWith("*")) {
             try {
-                com.zenith.asset.AssetIdentifier id = new com.zenith.asset.AssetIdentifier(textureFile.getAbsolutePath());
-                java.io.FileInputStream fis = new java.io.FileInputStream(textureFile);
-                com.zenith.asset.AssetResource resource = new com.zenith.asset.AssetResource(
-                        "LocalDisk",          // sourceName
-                        id,                   // location
-                        fis,                  // inputStream
-                        null,                 // metaStream (贴图不需要 meta)
-                        textureFile.lastModified() // lastModified
-                );
-                com.zenith.render.Texture texture = new com.zenith.render.backend.opengl.texture.GLTexture(resource);
-                InternalLogger.info("Texture bound from disk: " + textureFile.getName());
-                path.free();
-                return texture;
+                int texIndex = Integer.parseInt(textPath.substring(1));
+                PointerBuffer texturesBuf = scene.mTextures();
+                if (texturesBuf != null && texIndex < scene.mNumTextures()) {
+                    AITexture aiTexture = AITexture.create(texturesBuf.get(texIndex));
+
+                    // 获取内嵌贴图的字节数据
+                    ByteBuffer buffer;
+                    if (aiTexture.mHeight() == 0) {
+                        // 1. 压缩格式：宽度 mWidth 是字节大小
+                        int dataSize = aiTexture.mWidth();
+                        // 使用 pcData().address() 获取内存起始地址，并创建 ByteBuffer
+                        buffer = MemoryUtil.memByteBuffer(aiTexture.pcData().address(), dataSize);
+                    } else {
+                        // 2. 未压缩格式：ARGB 数据
+                        int dataSize = aiTexture.mWidth() * aiTexture.mHeight() * 4;
+                        buffer = MemoryUtil.memByteBuffer(aiTexture.pcData().address(), dataSize);
+                    }
+
+                    // 将 ByteBuffer 转换为 InputStream，复用之前的 AssetResource 加载管线
+                    byte[] bytes = new byte[buffer.remaining()];
+                    buffer.get(bytes);
+                    ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+
+                    AssetIdentifier id = new AssetIdentifier("EmbeddedTexture_" + texIndex);
+                    AssetResource resource = new AssetResource("Memory", id, bais, null, 0);
+                    Texture texture = new GLTexture(resource);
+
+                    InternalLogger.info("Loaded embedded texture: " + textPath);
+                    path.free();
+                    return texture;
+                }
             } catch (Exception e) {
-                InternalLogger.error("Failed to bind texture: " + textureFile.getName() + " -> " + e.getMessage());
+                InternalLogger.error("Failed to load embedded texture: " + e.getMessage());
             }
         }
+        // --- 如果不是内嵌贴图，则按之前的逻辑从硬盘加载 ---
+        else {
+            File textureFile = new File(modelDir, textPath);
+            if (!textureFile.exists()) {
+                textureFile = new File(modelDir, new File(textPath).getName());
+            }
+
+            if (textureFile.exists()) {
+                try {
+                    AssetIdentifier id = new AssetIdentifier(textureFile.getAbsolutePath());
+                    java.io.FileInputStream fis = new java.io.FileInputStream(textureFile);
+                    AssetResource resource = new AssetResource(
+                            "LocalDisk", id, fis, null, textureFile.lastModified()
+                    );
+                    Texture texture = new GLTexture(resource);
+                    InternalLogger.info("Texture bound from disk: " + textureFile.getName());
+                    path.free();
+                    return texture;
+                } catch (Exception e) {
+                    InternalLogger.error("Failed to bind texture: " + textureFile.getName() + " -> " + e.getMessage());
+                }
+            }
+        }
+
         path.free();
         return null;
     }
 
     private static void buildBoneHierarchy(AIScene scene, Map<String, Integer> boneMap, List<BoneData> boneList) {
-        // 1. 收集显式蒙皮骨骼的 OffsetMatrix
         Map<String, Matrix4f> offsetMatrices = new HashMap<>();
         int meshCount = scene.mNumMeshes();
         PointerBuffer meshes = scene.mMeshes();
@@ -201,9 +283,7 @@ public class AssimpModelLoader {
             }
         }
 
-        // 2. 开始递归遍历，同时传递父节点的全局变换
         InternalLogger.info("Building hierarchy with proper Inverse Bind Poses...");
-        // 初始全局变换为单位阵
         traverseNodeTree(Objects.requireNonNull(scene.mRootNode()), -1, new Matrix4f(), boneMap, boneList, offsetMatrices);
     }
 
@@ -213,17 +293,13 @@ public class AssimpModelLoader {
         String name = node.mName().dataString();
         int currentIdx = boneList.size();
 
-        // 计算当前节点的初始全局变换：ParentGlobal * Local
         Matrix4f localTransform = toJoml(node.mTransformation());
         Matrix4f globalTransform = new Matrix4f(parentGlobalTransform).mul(localTransform);
 
-        // 确定逆绑定矩阵 (IBP)
         Matrix4f ibp;
         if (offsetMatrices.containsKey(name)) {
-            // 如果 Assimp 提供了显式的 OffsetMatrix，优先使用它
             ibp = offsetMatrices.get(name);
         } else {
-            // 否则（对于普通节点），IBP = 初始全局变换的逆
             ibp = new Matrix4f(globalTransform).invert();
         }
 
@@ -232,63 +308,14 @@ public class AssimpModelLoader {
         data.parentIndex = parentIdx;
         boneList.add(data);
 
-        // 递归子节点
         int childCount = node.mNumChildren();
         PointerBuffer children = node.mChildren();
         if (children != null) {
             for (int i = 0; i < childCount; i++) {
-                // 将当前的全局变换传给子节点
                 traverseNodeTree(AINode.create(children.get(i)), currentIdx, globalTransform, boneMap, boneList, offsetMatrices);
             }
         }
     }
-
-
-    /**
-     * 递归遍历：确保父节点永远比子节点先被添加
-     */
-    private static void traverseNodeTree(AINode node, int parentIdx, Map<String, Integer> boneMap,
-                                         List<BoneData> boneList, Map<String, Matrix4f> offsetMatrices) {
-        String name = node.mName().dataString();
-        int currentIdx = boneList.size(); // 当前长度即为下一个可用的 ID
-
-        // 获取该节点的逆绑定矩阵，如果没有（只是普通节点），则使用单位阵
-        Matrix4f ibp = offsetMatrices.getOrDefault(name, new Matrix4f());
-
-        // 记录 ID 映射并添加到列表
-        boneMap.put(name, currentIdx);
-        BoneData data = new BoneData(currentIdx, name, ibp);
-        data.parentIndex = parentIdx; // 记录父节点索引
-        boneList.add(data);
-
-        // 递归处理子节点
-        int childCount = node.mNumChildren();
-        PointerBuffer children = node.mChildren();
-        if (children != null) {
-            for (int i = 0; i < childCount; i++) {
-                traverseNodeTree(AINode.create(children.get(i)), currentIdx, boneMap, boneList, offsetMatrices);
-            }
-        }
-    }
-
-    private static void setParentIndices(AINode node, int lastValidParentIdx, Map<String, Integer> boneMap, List<BoneData> boneList) {
-        String name = node.mName().dataString();
-        int currentBoneIdx = boneMap.getOrDefault(name, -1);
-
-        int nextParentIdxForChildren = lastValidParentIdx;
-
-        if (currentBoneIdx != -1) {
-            boneList.get(currentBoneIdx).parentIndex = lastValidParentIdx;
-            nextParentIdxForChildren = currentBoneIdx;
-        }
-
-        int childCount = node.mNumChildren();
-        PointerBuffer children = node.mChildren();
-        for (int i = 0; i < childCount; i++) {
-            setParentIndices(AINode.create(children.get(i)), nextParentIdxForChildren, boneMap, boneList);
-        }
-    }
-
 
     private static GLSkinnedMesh loadMeshFromAssimp(AIScene scene, Map<String, Integer> boneMap) {
         int meshCount = scene.mNumMeshes();
@@ -306,8 +333,6 @@ public class AssimpModelLoader {
         float[] allWeights = new float[totalVertices * 4];
         Arrays.fill(allBoneIds, -1);
 
-        // --- 核心修复：建立 Mesh 到 NodeID 的映射 ---
-        // 这样我们才知道没有骨骼的 Mesh 到底属于哪个会动的节点
         Map<Integer, Integer> meshToNodeMap = new HashMap<>();
         mapMeshesToNodes(scene.mRootNode(), boneMap, meshToNodeMap);
 
@@ -317,7 +342,6 @@ public class AssimpModelLoader {
             PointerBuffer aiBones = m.mBones();
 
             if (aiBones != null && m.mNumBones() > 0) {
-                // 1. 蒙皮动画逻辑 (模型自带权重)
                 for (int b = 0; b < m.mNumBones(); b++) {
                     AIBone bone = AIBone.create(aiBones.get(b));
                     int bId = boneMap.getOrDefault(bone.mName().dataString(), -1);
@@ -329,11 +353,9 @@ public class AssimpModelLoader {
                     }
                 }
             } else {
-                // 2. 节点动画逻辑 (刚体，整个 Mesh 跟着节点动)
                 int nodeId = meshToNodeMap.getOrDefault(i, -1);
                 if (nodeId != -1) {
                     for (int v = 0; v < m.mNumVertices(); v++) {
-                        // 强制给这个顶点的第一个槽位绑定 1.0 的权重，关联到其父节点
                         fillVertexBoneData(allBoneIds, allWeights, vOffset + v, nodeId, 1.0f);
                     }
                 }
@@ -341,7 +363,6 @@ public class AssimpModelLoader {
             vOffset += m.mNumVertices();
         }
 
-        // 构建交织数组 (Interleaved data)
         float[] interleaved = new float[totalVertices * 16];
         int[] indices = new int[totalIndices];
         vOffset = 0;
@@ -368,7 +389,6 @@ public class AssimpModelLoader {
                     interleaved[p + 5] = norm.x(); interleaved[p + 6] = norm.y(); interleaved[p + 7] = norm.z();
                 }
 
-                // 写入 IDs 和 Weights
                 interleaved[p + 8] = Float.intBitsToFloat(allBoneIds[gV * 4 + 0]);
                 interleaved[p + 9] = Float.intBitsToFloat(allBoneIds[gV * 4 + 1]);
                 interleaved[p + 10] = Float.intBitsToFloat(allBoneIds[gV * 4 + 2]);
@@ -429,17 +449,14 @@ public class AssimpModelLoader {
 
             List<AnimationClip.JointData> jointDataList = new ArrayList<>();
             int channelCount = aiAnim.mNumChannels();
-            int matchedChannels = 0;
 
             PointerBuffer channels = aiAnim.mChannels();
             for (int c = 0; c < channelCount; c++) {
                 AINodeAnim channel = AINodeAnim.create(channels.get(c));
                 String channelName = channel.mNodeName().dataString();
 
-                // 尝试匹配骨骼 ID
                 int jIdx = boneMap.getOrDefault(channelName, -1);
 
-                // 针对 GLTF 的特殊处理：有时候名字会带有路径或前缀
                 if (jIdx == -1 && channelName.contains("_")) {
                     String shortName = channelName.substring(channelName.lastIndexOf("_") + 1);
                     jIdx = boneMap.getOrDefault(shortName, -1);
@@ -452,25 +469,19 @@ public class AssimpModelLoader {
                     jd.rotations = extractRotationKeys(channel, tps);
                     jd.scales = extractScaleKeys(channel, tps);
                     jointDataList.add(jd);
-                    matchedChannels++;
                 }
             }
-
-            InternalLogger.info(String.format("Animation '%s': Found %d channels, Matched %d/%d to joints.",
-                    animName, channelCount, matchedChannels, numJoints));
-
             clips.put(animName, new AnimationClip(animName, duration, numJoints, jointDataList.toArray(new AnimationClip.JointData[0])));
         }
         return clips;
     }
-
 
     private static Keyframes.TranslationKey[] extractTranslationKeys(AINodeAnim c, double tps) {
         Keyframes.TranslationKey[] k = new Keyframes.TranslationKey[c.mNumPositionKeys()];
         for (int i = 0; i < k.length; i++) {
             AIVectorKey key = c.mPositionKeys().get(i);
             k[i] = new Keyframes.TranslationKey();
-            k[i].time = (float) (key.mTime() / tps); // 转换为秒
+            k[i].time = (float) (key.mTime() / tps);
             k[i].value.set(key.mValue().x(), key.mValue().y(), key.mValue().z());
         }
         return k;
@@ -481,7 +492,7 @@ public class AssimpModelLoader {
         for (int i = 0; i < k.length; i++) {
             AIQuatKey key = c.mRotationKeys().get(i);
             k[i] = new Keyframes.RotationKey();
-            k[i].time = (float) (key.mTime() / tps); // 转换为秒
+            k[i].time = (float) (key.mTime() / tps);
             k[i].value.set(key.mValue().x(), key.mValue().y(), key.mValue().z(), key.mValue().w());
         }
         return k;
@@ -492,15 +503,11 @@ public class AssimpModelLoader {
         for (int i = 0; i < k.length; i++) {
             AIVectorKey key = c.mScalingKeys().get(i);
             k[i] = new Keyframes.ScaleKey();
-            k[i].time = (float) (key.mTime() / tps); // 转换为秒
+            k[i].time = (float) (key.mTime() / tps);
             k[i].value.set(key.mValue().x(), key.mValue().y(), key.mValue().z());
         }
         return k;
     }
-
-    // ============================================================
-    // 辅助工具方法
-    // ============================================================
 
     private static VertexLayout createStandardLayout() {
         VertexLayout layout = new VertexLayout();
@@ -522,39 +529,6 @@ public class AssimpModelLoader {
         }
     }
 
-    private static Keyframes.TranslationKey[] extractTranslationKeys(AINodeAnim c) {
-        Keyframes.TranslationKey[] k = new Keyframes.TranslationKey[c.mNumPositionKeys()];
-        for (int i = 0; i < k.length; i++) {
-            AIVectorKey key = c.mPositionKeys().get(i);
-            k[i] = new Keyframes.TranslationKey();
-            k[i].time = (float) key.mTime();
-            k[i].value.set(key.mValue().x(), key.mValue().y(), key.mValue().z());
-        }
-        return k;
-    }
-
-    private static Keyframes.RotationKey[] extractRotationKeys(AINodeAnim c) {
-        Keyframes.RotationKey[] k = new Keyframes.RotationKey[c.mNumRotationKeys()];
-        for (int i = 0; i < k.length; i++) {
-            AIQuatKey key = c.mRotationKeys().get(i);
-            k[i] = new Keyframes.RotationKey();
-            k[i].time = (float) key.mTime();
-            k[i].value.set(key.mValue().x(), key.mValue().y(), key.mValue().z(), key.mValue().w());
-        }
-        return k;
-    }
-
-    private static Keyframes.ScaleKey[] extractScaleKeys(AINodeAnim c) {
-        Keyframes.ScaleKey[] k = new Keyframes.ScaleKey[c.mNumScalingKeys()];
-        for (int i = 0; i < k.length; i++) {
-            AIVectorKey key = c.mScalingKeys().get(i);
-            k[i] = new Keyframes.ScaleKey();
-            k[i].time = (float) key.mTime();
-            k[i].value.set(key.mValue().x(), key.mValue().y(), key.mValue().z());
-        }
-        return k;
-    }
-
     private static Matrix4f toJoml(AIMatrix4x4 m) {
         return new Matrix4f(
                 m.a1(), m.b1(), m.c1(), m.d1(),
@@ -563,8 +537,6 @@ public class AssimpModelLoader {
                 m.a4(), m.b4(), m.c4(), m.d4()
         );
     }
-
-
 
     private static Skeleton createSkeletonFromBoneList(List<BoneData> list) {
         int s = list.size();
@@ -578,5 +550,45 @@ public class AssimpModelLoader {
     private static class BoneData {
         int id; String name; int parentIndex = -1; Matrix4f inverseBindPose;
         BoneData(int id, String name, Matrix4f ibp) { this.id = id; this.name = name; this.inverseBindPose = ibp; }
+    }
+
+    // ============================================================
+    // JSON 数据映射类 (用于配合 Gson 解析)
+    // ============================================================
+    private static class JsonModelData {
+        public String modelName;
+        public JsonSkeleton skeleton;
+        public float[] vertices;
+        public int[] indices;
+        public JsonAnimation[] animations;
+
+        public static class JsonSkeleton {
+            public int[] parentIndices;
+            public String[] jointNames;
+            public float[][] inverseBindPoses;
+        }
+
+        public static class JsonAnimation {
+            public String name;
+            public float duration;
+            public JsonJointData[] jointData;
+        }
+
+        public static class JsonJointData {
+            public int jointIndex;
+            public JsonKeyframeVector3[] translations;
+            public JsonKeyframeVector4[] rotations;
+            public JsonKeyframeVector3[] scales;
+        }
+
+        public static class JsonKeyframeVector3 {
+            public float time;
+            public Vector3f value;
+        }
+
+        public static class JsonKeyframeVector4 {
+            public float time;
+            public Quaternionf value;
+        }
     }
 }

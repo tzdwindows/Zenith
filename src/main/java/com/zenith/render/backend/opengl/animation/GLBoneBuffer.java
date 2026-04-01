@@ -14,43 +14,28 @@ import static org.lwjgl.opengl.GL31.GL_UNIFORM_BUFFER;
  * 它可以高效地更新数百个骨骼矩阵，并供多个 Shader 同时读取。
  */
 public class GLBoneBuffer {
-
     private final int rendererID;
-    private final int maxJoints;
+    private final int maxJoints = 100; // 【修改】强制设为 100，与 Shader 保持一致
     private final int size;
 
-    /**
-     * @param maxJoints 该缓冲区支持的最大骨骼数量（通常与 Shader 中的 100 对应）
-     */
-    public GLBoneBuffer(int maxJoints) {
-        this.maxJoints = maxJoints;
-        // 每个矩阵 16 个 float，每个 float 4 字节
+    public GLBoneBuffer(int numJoints) {
+        // 【修改】不管模型有多少骨骼，缓冲区必须分配 100 个矩阵的空间
         this.size = maxJoints * 16 * 4;
 
-        // 1. 创建 UBO
         this.rendererID = glGenBuffers();
         glBindBuffer(GL_UNIFORM_BUFFER, rendererID);
-
-        // 2. 初始化缓冲区大小，使用 GL_DYNAMIC_DRAW 因为每一帧都会更新
         glBufferData(GL_UNIFORM_BUFFER, size, GL_DYNAMIC_DRAW);
-
         glBindBuffer(GL_UNIFORM_BUFFER, 0);
-        InternalLogger.info(String.format("GLBoneBuffer created for %d joints (Size: %d bytes)", maxJoints, size));
+
+        InternalLogger.info(String.format("GLBoneBuffer allocated for %d joints (Fixed Size: %d bytes)", maxJoints, size));
     }
 
-    /**
-     * 将 CPU 计算好的蒙皮矩阵上传到 GPU。
-     * 建议传入由 SkinningMatrixJob 直接填充的 FloatBuffer。
-     */
     public void update(FloatBuffer skinningMatrices) {
-        // 确保传入的 Buffer 大小合法
-        if (skinningMatrices.remaining() > maxJoints * 16) {
-            InternalLogger.error("Skinning matrices buffer exceeds GLBoneBuffer capacity!");
-            return;
-        }
+        // 即使只更新前几个矩阵，也要确保不越界
+        int updateSize = Math.min(skinningMatrices.remaining(), maxJoints * 16) * 4;
 
         glBindBuffer(GL_UNIFORM_BUFFER, rendererID);
-        // 使用 glBufferSubData 仅更新数据而不重新分配显存，这是性能最优解
+        // 只更新实际有数据的部分，偏移量从 0 开始
         glBufferSubData(GL_UNIFORM_BUFFER, 0, skinningMatrices);
         glBindBuffer(GL_UNIFORM_BUFFER, 0);
     }

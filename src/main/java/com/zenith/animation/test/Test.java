@@ -77,7 +77,7 @@ public class Test {
         glEnable(GL_DEPTH_TEST);
 
         // 4. 加载资源
-        String modelPath = "C:\\Users\\tzdwindows 7\\Downloads\\CesiumMan.gltf";
+        String modelPath = "F:\\glTF-Sample-Models-main\\2.0\\SimpleSkin\\glTF\\SimpleSkin.gltf";
         AnimatedModel animatedModel = AssimpModelLoader.load(modelPath);
 
         // --- 修改 1：使用新的构造函数，自动同步贴图 ---
@@ -92,19 +92,12 @@ public class Test {
         }
 
         Transform modelTransform = new Transform();
-        // CesiumMan 默认可能比较小或者朝向不对，根据需要调整
-        // modelTransform.getRotation().rotateX((float) Math.toRadians(-90));
-
         lastFrameTime = glfwGetTime();
-
         while (!window.shouldClose()) {
             double currentTime = glfwGetTime();
             float deltaTime = (float) (currentTime - lastFrameTime);
             lastFrameTime = currentTime;
-
             animator.update(deltaTime);
-
-            // 更新摄像机
             float camX = (float) (Math.cos(pitch) * Math.sin(yaw) * distance);
             float camY = (float) (Math.sin(pitch) * distance);
             float camZ = (float) (Math.cos(pitch) * Math.cos(yaw) * distance);
@@ -115,25 +108,9 @@ public class Test {
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
             Matrix4f viewProj = new Matrix4f(camera.getProjectionMatrix()).mul(camera.getViewMatrix());
-
             shader.bind();
-
-            // --- 修改 2：调用 animator.bind ---
-            // 这会自动执行：
-            // 1. 将骨骼 SSBO/UBO 绑定到 slot 0
-            // 2. 将模型贴图按顺序绑定到 GL_TEXTURE0, GL_TEXTURE1...
             animator.bind(0);
-
-            // 如果你的 Shader 还在使用 Uniform 传骨骼矩阵，保留这行：
-            shader.setBoneMatrices(animator.getSkinningBuffer());
-
-            // --- 修改 3：通知 Shader 贴图采样器使用单元 0 ---
-            // 假设你的 Shader 中采样器变量名为 "u_Diffuse"
-            // shader.setUniform("u_Diffuse", 0);
-
             shader.setup(viewProj, modelTransform.getModelMatrix(), Color.WHITE);
-
-            // 绘制
             animatedModel.getMesh().render();
 
             window.update();
