@@ -1,5 +1,6 @@
 package com.zenith.render.backend.opengl;
 
+import com.zenith.common.config.RayTracingConfig;
 import com.zenith.common.config.RenderConfig;
 import com.zenith.render.backend.opengl.shader.ScreenShader;
 import java.nio.ByteBuffer;
@@ -45,7 +46,7 @@ public class SceneFramebuffer {
         depthTex = createTexture(GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT, GL_NEAREST);
 
         // 创建专门用于光追写入的纹理
-        rayTraceTex = createTexture(internalFormat, GL_RGBA, GL_FLOAT, GL_LINEAR);
+        rayTraceTex = createTexture(GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT, GL_LINEAR);
 
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTex, 0);
@@ -129,6 +130,7 @@ public class SceneFramebuffer {
 
     /**
      * 将 FBO 内容最终呈现到屏幕
+     * 自动处理光栅化与光追纹理的切换
      */
     public void renderToScreen() {
         glDisable(GL_DEPTH_TEST);
@@ -137,12 +139,13 @@ public class SceneFramebuffer {
         screenShader.bind();
         glActiveTexture(GL_TEXTURE0);
 
-        // 默认显示主场景纹理，如果是纯光追模式，可以改为绑定 rayTraceTex
-        glBindTexture(GL_TEXTURE_2D, colorTex);
+        if (com.zenith.common.config.RayTracingConfig.ENABLE_RAY_TRACING) {
+            glBindTexture(GL_TEXTURE_2D, rayTraceTex);
+        } else {
+            glBindTexture(GL_TEXTURE_2D, colorTex);
+        }
 
-        // 这里不需要通过 glGetUniformLocation 频繁获取，GLShader 的 setUniform 已封装
         screenShader.setUniform("u_Texture", 0);
-
         glBindVertexArray(quadVao);
         glDrawArrays(GL_TRIANGLES, 0, 6);
         glBindVertexArray(0);
@@ -150,6 +153,7 @@ public class SceneFramebuffer {
         screenShader.unbind();
         glEnable(GL_DEPTH_TEST);
     }
+
 
     public void ensureResources() {
         if (screenShader == null) screenShader = new ScreenShader();

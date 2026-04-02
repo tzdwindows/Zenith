@@ -86,6 +86,7 @@ public class Test extends ZenithEngine {
         setRtProvider(softwareRT);
         addRtMesh(terrainMesh);
         LightManager.get().addLight(sunLight);
+        softwareRT.buildAccelerationStructures(rtMeshes);
     }
 
     @Override

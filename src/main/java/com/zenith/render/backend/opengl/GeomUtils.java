@@ -15,41 +15,73 @@ public class GeomUtils {
      * Pos(4) [x,y,z,1] + Normal(4) [x,y,z,0] + UV(4) [u,v,0,0]
      */
     public static float[] flatten(List<Mesh> meshes) {
-        List<Float> combinedData = new ArrayList<>();
+        // 预估大小：每个顶点 12 个 float (Pos4, Norm4, UV4)
+        int totalVertices = 0;
+        for (Mesh m : meshes) totalVertices += (m instanceof GLMesh gm && gm.getIndices() != null) ? gm.getIndices().length : m.getVertexCount();
+
+        float[] result = new float[totalVertices * 12];
+        int offset = 0;
 
         for (Mesh mesh : meshes) {
             if (!(mesh instanceof GLMesh glMesh)) continue;
-
-            float[] vertices = glMesh.getVertices();
+            float[] src = glMesh.getVertices();
             int[] indices = glMesh.getIndices();
             VertexLayout layout = glMesh.getLayout();
+            int stride = layout.getStride() / 4;
 
-            if (vertices == null) continue;
+            int pOff = getOffset(layout, "aPos");
+            int nOff = getOffset(layout, "aNormal");
+            int tOff = getOffset(layout, "aTexCoord");
 
-            // 1. 获取属性在原有布局中的偏移量
-            int stride = layout.getStride() / 4; // float步长
-            int posOff = getOffset(layout, "aPos");
-            int normOff = getOffset(layout, "aNormal");
-            int uvOff = getOffset(layout, "aTexCoord");
+            if (indices != null) {
+                // 👉 Indexed mesh
+                for (int idx : indices) {
+                    int base = idx * stride;
 
-            // 2. 如果有索引，根据索引重新组装成三角形汤
-            if (indices != null && indices.length > 0) {
-                for (int index : indices) {
-                    processVertex(combinedData, vertices, index, stride, posOff, normOff, uvOff);
+                    // Position
+                    result[offset++] = src[base + pOff];
+                    result[offset++] = src[base + pOff + 1];
+                    result[offset++] = src[base + pOff + 2];
+                    result[offset++] = 1.0f;
+
+                    // Normal
+                    result[offset++] = (nOff != -1) ? src[base + nOff] : 0;
+                    result[offset++] = (nOff != -1) ? src[base + nOff + 1] : 0;
+                    result[offset++] = (nOff != -1) ? src[base + nOff + 2] : 0;
+                    result[offset++] = 0.0f;
+
+                    // UV
+                    result[offset++] = (tOff != -1) ? src[base + tOff] : 0;
+                    result[offset++] = (tOff != -1) ? src[base + tOff + 1] : 0;
+                    result[offset++] = 0.0f;
+                    result[offset++] = 0.0f;
                 }
             } else {
-                // 如果没有索引，按顺序处理
-                int vertexCount = vertices.length / stride;
-                for (int i = 0; i < vertexCount; i++) {
-                    processVertex(combinedData, vertices, i, stride, posOff, normOff, uvOff);
+                // 👉 非 indexed mesh（🔥 你缺的就是这个）
+                int vertexCount = mesh.getVertexCount();
+
+                for (int v = 0; v < vertexCount; v++) {
+                    int base = v * stride;
+
+                    // Position
+                    result[offset++] = src[base + pOff];
+                    result[offset++] = src[base + pOff + 1];
+                    result[offset++] = src[base + pOff + 2];
+                    result[offset++] = 1.0f;
+
+                    // Normal
+                    result[offset++] = (nOff != -1) ? src[base + nOff] : 0;
+                    result[offset++] = (nOff != -1) ? src[base + nOff + 1] : 0;
+                    result[offset++] = (nOff != -1) ? src[base + nOff + 2] : 0;
+                    result[offset++] = 0.0f;
+
+                    // UV
+                    result[offset++] = (tOff != -1) ? src[base + tOff] : 0;
+                    result[offset++] = (tOff != -1) ? src[base + tOff + 1] : 0;
+                    result[offset++] = 0.0f;
+                    result[offset++] = 0.0f;
                 }
             }
-        }
-
-        // 转换为原生数组
-        float[] result = new float[combinedData.size()];
-        for (int i = 0; i < combinedData.size(); i++) {
-            result[i] = combinedData.get(i);
         }
         return result;
     }
@@ -80,7 +112,7 @@ public class GeomUtils {
         int offset = 0;
         for (VertexAttribute attr : layout.getAttributes()) {
             if (attr.name.equals(name)) return offset / 4;
-            offset += attr.count * 4; // 这里假设都是 float 类型
+            offset += attr.count * 4;
         }
         return -1;
     }

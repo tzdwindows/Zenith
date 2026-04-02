@@ -28,6 +28,7 @@ import static org.lwjgl.opengl.GL11C.glViewport;
 import static org.lwjgl.opengl.GL15.*;
 import static org.lwjgl.opengl.GL20.*;
 import static org.lwjgl.opengl.GL30.*;
+import static org.lwjgl.opengl.GL44.glClearTexImage;
 
 /**
  * 增强型引擎抽象类：支持 3D 渲染、UI 系统与 高级异步加载画面
@@ -283,10 +284,16 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
             }
 
             if (RayTracingConfig.ENABLE_RAY_TRACING && rtProvider != null) {
+                float[] clearColor = {0f, 0f, 0f, 0f};
+                glClearTexImage(sceneFBO.getRayTraceTargetID(), 0, GL_RGBA, GL_FLOAT, clearColor);
+
                 if (RayTracingConfig.DYNAMIC_AS_UPDATE) {
                     rtProvider.buildAccelerationStructures(rtMeshes);
                 }
+
                 rtProvider.trace(sceneFBO, camera);
+
+                org.lwjgl.opengl.GL42.glMemoryBarrier(org.lwjgl.opengl.GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
             }
 
             sceneFBO.copyToHistory();
