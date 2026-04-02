@@ -1,0 +1,196 @@
+#version 430 core
+
+struct Vertex {
+    vec4 position;
+    vec4 normal;
+    vec4 texCoord;
+};
+
+struct Camera {
+    vec3 position;
+    float fov;
+    vec3 forward;
+    float aperture;
+    vec3 up;
+    float focalDist;
+    vec3 right;
+    float _pad0;
+};
+
+struct BVHNode {
+    vec3 aabbMin;
+    int leftFirst;
+    vec3 aabbMax;
+    int triCount;
+};
+
+layout(std430, binding = 2) buffer VertexBuffer {
+    Vertex vertices[];
+};
+
+layout(std430, binding = 3) buffer BVHBuffer {
+    BVHNode bvhNodes[];
+};
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(rgba16f, binding = 0) uniform image2D imgOutput;
+layout(binding = 1) uniform sampler2D u_BaseColor;
+
+uniform Camera camera;
+uniform int u_SampleCount;
+uniform int u_VertexCount;
+
+vec3 skyColor(vec3 dir) {
+    float t = clamp(0.5 * (normalize(dir).y + 1.0), 0.0, 1.0);
+    return mix(vec3(0.95, 0.97, 1.0), vec3(0.55, 0.70, 0.95), t);
+}
+
+bool rayTriangleIntersect(vec3 v0, vec3 v1, vec3 v2, vec3 ro, vec3 rd, out float t) {
+    vec3 e1 = v1 - v0;
+    vec3 e2 = v2 - v0;
+    vec3 p = cross(rd, e2);
+    float det = dot(e1, p);
+    if (abs(det) < 0.0001) return false;
+
+    float invDet = 1.0 / det;
+    vec3 s = ro - v0;
+
+    float u = dot(s, p) * invDet;
+    if (u < 0.0 || u > 1.0) return false;
+
+    vec3 q = cross(s, e1);
+    float v = dot(rd, q) * invDet;
+    if (v < 0.0 || u + v > 1.0) return false;
+
+    t = dot(e2, q) * invDet;
+    return t > 0.001;
+}
+
+float rayAABBIntersect(vec3 ro, vec3 invRd, vec3 aabbMin, vec3 aabbMax) {
+    vec3 t0 = (aabbMin - ro) * invRd;
+    vec3 t1 = (aabbMax - ro) * invRd;
+    vec3 tmin = min(t0, t1);
+    vec3 tmax = max(t0, t1);
+
+    float tNear = max(max(tmin.x, tmin.y), tmin.z);
+    float tFar  = min(min(tmax.x, tmax.y), tmax.z);
+
+    if (tNear > tFar || tFar < 0.0) return 1e30;
+    return tNear > 0.0 ? tNear : tFar;
+}
+
+vec3 shadeHit(vec3 hitPos, vec3 hitNormal, vec3 viewDir, vec3 baseColor) {
+    vec3 n = normalize(hitNormal);
+    vec3 v = normalize(viewDir);
+
+    if (dot(n, v) < 0.0) n = -n;
+
+    vec3 lightDir = normalize(vec3(-0.35, -1.0, -0.25));
+    vec3 lightColor = vec3(1.0, 0.98, 0.92);
+
+    float ndotl = max(dot(n, -lightDir), 0.0);
+    vec3 diffuse = baseColor * lightColor * ndotl;
+
+    vec3 ambient = baseColor * vec3(0.12, 0.13, 0.15);
+
+    vec3 h = normalize((-lightDir) + v);
+    float spec = pow(max(dot(n, h), 0.0), 64.0) * 0.15;
+    vec3 specular = vec3(spec);
+
+    return clamp(ambient + diffuse + specular, 0.0, 1.0);
+}
+
+bool traceScene(vec3 ro, vec3 rd, out float tNear, out vec3 hitNormal) {
+    tNear = 1e20;
+    bool hit = false;
+
+    vec3 invRd = 1.0 / rd;
+
+    int stack[64];
+    int stackPtr = 0;
+    stack[stackPtr++] = 0;
+
+    while (stackPtr > 0) {
+        int nodeIdx = stack[--stackPtr];
+        BVHNode node = bvhNodes[nodeIdx];
+
+        float distAABB = rayAABBIntersect(ro, invRd, node.aabbMin, node.aabbMax);
+        if (distAABB >= tNear) continue;
+
+        if (node.triCount > 0) {
+            for (int i = 0; i < node.triCount; i++) {
+                int vertBase = (node.leftFirst + i) * 3;
+                if (vertBase + 2 >= u_VertexCount) continue;
+
+                vec3 v0 = vertices[vertBase + 0].position.xyz;
+                vec3 v1 = vertices[vertBase + 1].position.xyz;
+                vec3 v2 = vertices[vertBase + 2].position.xyz;
+
+                float t;
+                if (rayTriangleIntersect(v0, v1, v2, ro, rd, t)) {
+                    if (t < tNear) {
+                        tNear = t;
+                        hitNormal = normalize(cross(v1 - v0, v2 - v0));
+                        hit = true;
+                    }
+                }
+            }
+        } else {
+            int child1 = node.leftFirst;
+            int child2 = node.leftFirst + 1;
+
+            float dist1 = rayAABBIntersect(ro, invRd, bvhNodes[child1].aabbMin, bvhNodes[child1].aabbMax);
+            float dist2 = rayAABBIntersect(ro, invRd, bvhNodes[child2].aabbMin, bvhNodes[child2].aabbMax);
+
+            if (dist1 > dist2) {
+                if (dist1 < tNear && stackPtr < 64) stack[stackPtr++] = child1;
+                if (dist2 < tNear && stackPtr < 64) stack[stackPtr++] = child2;
+            } else {
+                if (dist2 < tNear && stackPtr < 64) stack[stackPtr++] = child2;
+                if (dist1 < tNear && stackPtr < 64) stack[stackPtr++] = child1;
+            }
+        }
+    }
+
+    return hit;
+}
+
+void main() {
+    ivec2 pixelCoords = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 res = imageSize(imgOutput);
+    if (pixelCoords.x >= res.x || pixelCoords.y >= res.y) return;
+
+    vec4 base = texelFetch(u_BaseColor, pixelCoords, 0);
+
+    vec2 texCoords = (vec2(pixelCoords) + 0.5) / vec2(res);
+    float aspectRatio = float(res.x) / float(res.y);
+    float fovRad = radians(camera.fov);
+    float scale = tan(fovRad * 0.5);
+
+    vec2 d = texCoords * 2.0 - 1.0;
+    d.x *= aspectRatio * scale;
+    d.y *= scale;
+
+    vec3 rayDir = normalize(d.x * camera.right + d.y * camera.up + camera.forward);
+    vec3 rayOrigin = camera.position + rayDir * 0.01;
+
+    vec3 finalColor = base.rgb;
+
+    if (u_VertexCount >= 3) {
+        float tNear;
+        vec3 hitNormal;
+        if (traceScene(rayOrigin, rayDir, tNear, hitNormal)) {
+            vec3 hitPos = rayOrigin + rayDir * tNear;
+            finalColor = shadeHit(hitPos, hitNormal, -rayDir, base.rgb);
+        }
+    }
+
+    if (u_SampleCount <= 1) {
+        imageStore(imgOutput, pixelCoords, vec4(finalColor, 1.0));
+    } else {
+        vec4 oldColor = imageLoad(imgOutput, pixelCoords);
+        vec4 accumulatedColor = mix(oldColor, vec4(finalColor, 1.0), 1.0 / float(u_SampleCount));
+        imageStore(imgOutput, pixelCoords, accumulatedColor);
+    }
+}
