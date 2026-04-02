@@ -24,7 +24,6 @@ public class Test extends ZenithEngine {
     private SkyShader skyShader;
     private WaterShader waterShader;
     private TerrainShader terrainShader;
-
     private float time = 0.0f;
     private final Matrix4f viewMatrix = new Matrix4f();
     private final Matrix4f projMatrix = new Matrix4f();
