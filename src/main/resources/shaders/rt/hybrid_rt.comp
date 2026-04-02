@@ -1,0 +1,35 @@
+#version 430 core
+
+// 1. 定义工作组大小（Compute Shader 必须）
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// 2. 包含头文件 (会被 Preprocessor 展开)
+#include "pathTracer/common/globals.glsl"
+#include "pathTracer/common/uniforms.glsl"
+#include "pathTracer/common/intersection.glsl"
+#include "pathTracer/common/sampling.glsl"
+#include "pathTracer/common/disney.glsl"
+#include "pathTracer/common/pathtrace.glsl"
+
+// 3. 计算着色器使用 image2D 写入结果，不要用 out vec4
+layout(rgba16f, binding = 0) uniform image2D imgOutput;
+
+void main() {
+    // 获取当前像素坐标
+    ivec2 pixelCoords = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(imgOutput);
+
+    // 边界检查
+    if (pixelCoords.x >= size.x || pixelCoords.y >= size.y) return;
+
+    // --- 这里是你原本在 Fragment Shader 逻辑的平替 ---
+
+    // 生成射线 (假设函数在 sampling.glsl 或 uniforms.glsl 中)
+    Ray ray = generateRay(pixelCoords, size);
+
+    // 执行路径追踪 (在 pathtrace.glsl 中)
+    vec3 color = pathTrace(ray);
+
+    // 4. 存储结果，替代原来的 outCol = ...
+    imageStore(imgOutput, pixelCoords, vec4(color, 1.0));
+}

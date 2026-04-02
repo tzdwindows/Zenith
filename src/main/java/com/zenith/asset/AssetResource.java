@@ -275,6 +275,10 @@ public class AssetResource implements AutoCloseable {
         });
     }
 
+    public boolean exists() {
+        return this.getInputStream() != null;
+    }
+
     @Override
     public String toString() {
         return location.toString() + (isDirectory() ? "/" : "");

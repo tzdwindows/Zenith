@@ -52,4 +52,11 @@ public abstract class Camera {
     public Vector3f getUp() {
         return transform.getUp();
     }
+
+    /**
+     * 获取相机的右向量 (Right Vector)
+     */
+    public Vector3f getRight() {
+        return transform.getRight();
+    }
 }

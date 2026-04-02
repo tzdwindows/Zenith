@@ -16,6 +16,8 @@ public class GLMesh extends Mesh {
     protected final VertexLayout layout;
     protected int currentBufferSize;
     protected int indexCount = 0; // 新增：记录索引数量
+    private float[] lastVertices;
+    private int[] lastIndices;
 
     public String name = "Unnamed Mesh";
 
@@ -53,7 +55,7 @@ public class GLMesh extends Mesh {
      */
     public void updateIndices(int[] data) {
         if (data == null || data.length == 0) return;
-
+        this.lastIndices = data;
         this.indexCount = data.length;
         glBindVertexArray(vao);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
@@ -66,7 +68,7 @@ public class GLMesh extends Mesh {
             this.vertexCount = 0;
             return;
         }
-
+        this.lastVertices = data;
         int requiredSize = data.length * 4;
         glBindVertexArray(vao);
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
@@ -100,7 +102,9 @@ public class GLMesh extends Mesh {
 
     public void bind() { glBindVertexArray(vao); }
     public void unbind() { glBindVertexArray(0); }
-
+    public float[] getVertices() { return lastVertices; }
+    public int[] getIndices() { return lastIndices; }
+    public VertexLayout getLayout() { return layout; }
     @Override
     public void dispose() {
         glDeleteVertexArrays(vao);

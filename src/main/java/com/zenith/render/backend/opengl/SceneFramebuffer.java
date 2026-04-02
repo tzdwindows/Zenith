@@ -1,17 +1,24 @@
 package com.zenith.render.backend.opengl;
 
+import com.zenith.common.config.RenderConfig;
 import com.zenith.render.backend.opengl.shader.ScreenShader;
+import java.nio.ByteBuffer;
+
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL13.GL_TEXTURE0;
 import static org.lwjgl.opengl.GL13.glActiveTexture;
 import static org.lwjgl.opengl.GL15.*;
 import static org.lwjgl.opengl.GL20.*;
 import static org.lwjgl.opengl.GL30.*;
+import static org.lwjgl.opengl.GL42.glTexStorage2D; // 用于更稳定的不可变存储
 
 public class SceneFramebuffer {
     private int fbo;
     private int colorTex;
     private int depthTex;
+
+    // 光追结果存储目标（如果是混合渲染，可以单独存放在这里）
+    private int rayTraceTex;
 
     private int copyFbo;
     private int colorCopyTex;
@@ -19,7 +26,6 @@ public class SceneFramebuffer {
 
     private int width, height;
 
-    // 使用继承自 GLShader 的类
     private int quadVao = 0;
     private int quadVbo = 0;
     private ScreenShader screenShader;
@@ -31,22 +37,27 @@ public class SceneFramebuffer {
     }
 
     private void init() {
+        int internalFormat = RenderConfig.FBO_INTERNAL_FORMAT;
+
         // 1. 初始化主场景 FBO
         fbo = glGenFramebuffers();
-        colorTex = createTexture(GL_RGBA16F, GL_RGBA, GL_FLOAT, GL_LINEAR);
+        colorTex = createTexture(internalFormat, GL_RGBA, GL_FLOAT, GL_LINEAR);
         depthTex = createTexture(GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT, GL_NEAREST);
+
+        // 创建专门用于光追写入的纹理
+        rayTraceTex = createTexture(internalFormat, GL_RGBA, GL_FLOAT, GL_LINEAR);
 
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTex, 0);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthTex, 0);
 
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            throw new RuntimeException("Main FBO incomplete");
+            throw new RuntimeException("Zenith Engine: Main FBO incomplete");
         }
 
-        // 2. 初始化用于 Copy 的 FBO
+        // 2. 初始化用于历史记录（Copy）的 FBO
         copyFbo = glGenFramebuffers();
-        colorCopyTex = createTexture(GL_RGBA16F, GL_RGBA, GL_FLOAT, GL_LINEAR);
+        colorCopyTex = createTexture(internalFormat, GL_RGBA, GL_FLOAT, GL_LINEAR);
         depthCopyTex = createTexture(GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT, GL_NEAREST);
 
         glBindFramebuffer(GL_FRAMEBUFFER, copyFbo);
@@ -54,7 +65,7 @@ public class SceneFramebuffer {
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthCopyTex, 0);
 
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            throw new RuntimeException("Copy FBO incomplete");
+            throw new RuntimeException("Zenith Engine: Copy FBO incomplete");
         }
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -65,9 +76,12 @@ public class SceneFramebuffer {
         if (newWidth == this.width && newHeight == this.height) return;
         this.width = newWidth;
         this.height = newHeight;
-        updateTextureSize(colorTex, GL_RGBA16F, GL_RGBA, GL_FLOAT);
+
+        int internalFormat = RenderConfig.FBO_INTERNAL_FORMAT;
+        updateTextureSize(colorTex, internalFormat, GL_RGBA, GL_FLOAT);
         updateTextureSize(depthTex, GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT);
-        updateTextureSize(colorCopyTex, GL_RGBA16F, GL_RGBA, GL_FLOAT);
+        updateTextureSize(rayTraceTex, internalFormat, GL_RGBA, GL_FLOAT);
+        updateTextureSize(colorCopyTex, internalFormat, GL_RGBA, GL_FLOAT);
         updateTextureSize(depthCopyTex, GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT);
 
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
@@ -86,7 +100,9 @@ public class SceneFramebuffer {
     private int createTexture(int internalFormat, int format, int type, int filter) {
         int tex = glGenTextures();
         glBindTexture(GL_TEXTURE_2D, tex);
-        glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, type, 0);
+        // 分配显存
+        glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, type, (ByteBuffer) null);
+
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -95,23 +111,14 @@ public class SceneFramebuffer {
         return tex;
     }
 
-    /**
-     * 绑定当前场景
-     */
     public void bind() {
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     }
 
-    /**
-     * 解绑当前场景
-     */
     public void unbind() {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 
-    /**
-     * 将当前场景的纹理复制到历史纹理
-     */
     public void copyToHistory() {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, copyFbo);
@@ -121,20 +128,20 @@ public class SceneFramebuffer {
     }
 
     /**
-     * 渲染场景到屏幕
+     * 将 FBO 内容最终呈现到屏幕
      */
     public void renderToScreen() {
-
-
         glDisable(GL_DEPTH_TEST);
+        ensureResources();
 
-        // 使用 GLShader 封装的绑定方法
         screenShader.bind();
-
-        // 激活并绑定纹理
         glActiveTexture(GL_TEXTURE0);
+
+        // 默认显示主场景纹理，如果是纯光追模式，可以改为绑定 rayTraceTex
         glBindTexture(GL_TEXTURE_2D, colorTex);
-        glUniform1i(glGetUniformLocation(screenShader.getRendererID_Internal(), "u_Texture"), 0);
+
+        // 这里不需要通过 glGetUniformLocation 频繁获取，GLShader 的 setUniform 已封装
+        screenShader.setUniform("u_Texture", 0);
 
         glBindVertexArray(quadVao);
         glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -144,17 +151,11 @@ public class SceneFramebuffer {
         glEnable(GL_DEPTH_TEST);
     }
 
-    /**
-     * 确保资源已创建
-     */
     public void ensureResources() {
         if (screenShader == null) screenShader = new ScreenShader();
         if (quadVao == 0) createQuad();
     }
 
-    /**
-     * 创建 Quad
-     */
     private void createQuad() {
         float[] quadVertices = {
                 -1f,  1f,  0f, 1f,   -1f, -1f,  0f, 0f,    1f, -1f,  1f, 0f,
@@ -173,14 +174,12 @@ public class SceneFramebuffer {
         glBindVertexArray(0);
     }
 
-    /**
-     * 销毁资源
-     */
     public void dispose() {
         glDeleteFramebuffers(fbo);
         glDeleteFramebuffers(copyFbo);
         glDeleteTextures(colorTex);
         glDeleteTextures(depthTex);
+        glDeleteTextures(rayTraceTex);
         glDeleteTextures(colorCopyTex);
         glDeleteTextures(depthCopyTex);
 
@@ -189,47 +188,40 @@ public class SceneFramebuffer {
         if (quadVbo != 0) glDeleteBuffers(quadVbo);
     }
 
-    /**
-     * 获取颜色纹理
-     * @return 颜色纹理
-     */
+    // --- Getters ---
+    public int getRayTraceTargetID() { return rayTraceTex; }
     public int getColorTex() { return colorTex; }
-
-    /**
-     * 获取深度纹理
-     * @return 深度纹理
-     */
     public int getDepthTex() { return depthTex; }
+    public int getWidth() { return width; }
+    public int getHeight() { return height; }
+    public ScreenShader getScreenShader() { return screenShader; }
 
     /**
-     * 获取颜色纹理（复制）
-     * @return 颜色纹理
+     * 获取硬件生成的深度纹理 ID，用于混合光追中的深度测试或射线步进
      */
+    public int getDepthTextureID() {
+        return depthTex;
+    }
+
+    /**
+     * 获取当前主场景的颜色纹理 ID（即 G-Buffer 的 Diffuse 部分）
+     */
+    public int getSceneTextureID() {
+        return colorTex;
+    }
+
+    /**
+     * 获取上一帧的历史纹理（用于时间性累积渲染，TSR/TAA）
+     */
+    public int getHistoryTextureID() {
+        return colorCopyTex;
+    }
+
     public int getColorCopyTex() {
         return colorCopyTex;
     }
 
-    /**
-     * 获取深度纹理 （复制）
-     * @return 深度纹理
-     */
     public int getDepthCopyTex() {
         return depthCopyTex;
-    }
-
-    /**
-     * 获取屏幕渲染器
-     * @return 屏幕渲染器
-     */
-    public ScreenShader getScreenShader() {
-        return screenShader;
-    }
-
-    /**
-     * 设置屏幕渲染器
-     * @param screenShader 屏幕渲染器
-     */
-    public void setScreenShader(ScreenShader screenShader) {
-        this.screenShader = screenShader;
     }
 }

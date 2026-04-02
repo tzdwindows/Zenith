@@ -1,9 +1,7 @@
 package com.zenith.core;
 
-import com.zenith.render.Camera;
-import com.zenith.render.Renderer;
-import com.zenith.render.VertexLayout;
-import com.zenith.render.Window;
+import com.zenith.common.config.RayTracingConfig;
+import com.zenith.render.*;
 import com.zenith.render.backend.opengl.*;
 import com.zenith.render.backend.opengl.buffer.GLBufferBuilder;
 import com.zenith.render.backend.opengl.shader.LoadingScreenShader;
@@ -40,6 +38,7 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     protected final GLCamera camera;
     private boolean running;
     private float lastFrameTime;
+    protected RayTracingProvider rtProvider;
     protected final boolean[] keys = new boolean[1024];
     protected final boolean[] mouseButtons = new boolean[8];
     private float lastMouseX = 640.0f, lastMouseY = 360.0f;
@@ -70,6 +69,7 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     private final ConcurrentLinkedQueue<Runnable> mainThreadTasks = new ConcurrentLinkedQueue<>();
     private LoadingScreenShader loadingShader;
     private int loadingVAO, loadingVBO;
+    protected List<Mesh> rtMeshes = new ArrayList<>();
 
     public ZenithEngine(Window window) {
         this.window = window;
@@ -227,6 +227,7 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
         while (running && !window.shouldClose()) {
             glfwPollEvents();
 
+            // 1. 处理主线程任务
             Runnable task;
             int tasksProcessed = 0;
             while ((task = mainThreadTasks.poll()) != null && tasksProcessed < 4) {
@@ -249,10 +250,9 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
                 continue;
             }
 
-            // --- 修复点 2：实时监测窗口焦点状态 ---
+            // 2. 焦点与输入更新
             boolean isFocused = glfwGetWindowAttrib(handle, GLFW_FOCUSED) == GLFW_TRUE;
             if (!isFocused && isCursorLocked) {
-                // 窗口被遮挡或切换了：强制释放鼠标，弹出 ESC
                 setCursorMode(false);
                 if (escScreen != null) escScreen.setVisible(true);
             }
@@ -266,19 +266,34 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
 
             update(logicDeltaTime);
 
+            // 3. 渲染准备
             viewProjMatrix.set(camera.getProjection().getMatrix()).mul(camera.getViewMatrix());
             frustumIntersection.set(viewProjMatrix);
 
+            // 4. 场景渲染开始
             sceneFBO.bind();
             glViewport(0, 0, window.getWidth(), window.getHeight());
             glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-            renderScene();
+            // --- 核心修改：渲染管线分支 ---
+
+            if (!RayTracingConfig.ENABLE_RAY_TRACING || RayTracingConfig.RT_MODE == 1) {
+                renderScene();
+            }
+
+            if (RayTracingConfig.ENABLE_RAY_TRACING && rtProvider != null) {
+                if (RayTracingConfig.DYNAMIC_AS_UPDATE) {
+                    rtProvider.buildAccelerationStructures(rtMeshes);
+                }
+                rtProvider.trace(sceneFBO, camera);
+            }
+
             sceneFBO.copyToHistory();
             renderAfterOpaqueScene();
 
             sceneFBO.unbind();
+
             glViewport(0, 0, window.getWidth(), window.getHeight());
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -290,7 +305,6 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
         }
         cleanup();
     }
-
 
     public void setRunning(boolean running) {
         this.isRunning = running;
@@ -528,9 +542,45 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
      */
     protected abstract void renderAfterOpaqueScene();
 
+    /**
+     * 设置光线追踪提供者并初始化
+     */
+    public void setRtProvider(RayTracingProvider provider) {
+        if (this.rtProvider != null) {
+            this.rtProvider.dispose();
+        }
+        this.rtProvider = provider;
+        if (this.rtProvider != null) {
+            this.rtProvider.init(sceneFBO.getWidth(), sceneFBO.getHeight());
+            if (!rtMeshes.isEmpty()) {
+                this.rtProvider.buildAccelerationStructures(rtMeshes);
+            }
+        }
+    }
+
+    /**
+     * 注册需要参与光追计算的网格
+     * 通常在加载模型（如 Fox.gltf）后调用
+     */
+    public void addRtMesh(Mesh mesh) {
+        if (mesh != null && !rtMeshes.contains(mesh)) {
+            rtMeshes.add(mesh);
+            if (!isLoading && rtProvider != null) {
+                rtProvider.buildAccelerationStructures(rtMeshes);
+            }
+        }
+    }
+
+    /**
+     * 清除所有光追几何体
+     */
+    public void clearRtMeshes() {
+        rtMeshes.clear();
+    }
+
     private void cleanup() {
+        if (rtProvider != null) rtProvider.dispose();
         if (uiContext != null) uiContext.dispose();
-        // 清理加载着色器
         loadingShader.dispose();
         glDeleteVertexArrays(loadingVAO);
         glDeleteBuffers(loadingVBO);

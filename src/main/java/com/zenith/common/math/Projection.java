@@ -126,4 +126,11 @@ public class Projection {
     public float getFar() {
         return zFar;
     }
+
+    /**
+     * 获取垂直视野角度 (弧度)
+     */
+    public float getFov() {
+        return fov;
+    }
 }

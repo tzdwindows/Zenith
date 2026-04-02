@@ -34,7 +34,7 @@ uniform bool enableAces;
 uniform bool simpleAcesFit;
 uniform vec3 backgroundCol;
 
-#include common/globals.glsl
+#include "common/globals.glsl"
 
 // Sources:
 // https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/

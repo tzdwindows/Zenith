@@ -40,7 +40,7 @@ public class Test extends ZenithEngine {
     private GLTexture grassAlbedo, grassNormal, grassRoughness;
     private GLTexture rockAlbedo, rockNormal, rockRoughness;
     private GLTexture waterAlbedo, waterNormal;
-
+    private SoftwarePathTracerProvider softwareRT;
     public Test() {
         super(new GLWindow("Zenith World System - Optical PBR", 1280, 720));
     }
@@ -81,6 +81,10 @@ public class Test extends ZenithEngine {
         sunLight.setColor(new Color(1.0f, 0.98f, 0.9f));
         sunLight.setIntensity(1.6f);
         sunLight.setAmbientStrength(0.18f);
+
+        softwareRT = new SoftwarePathTracerProvider();
+        setRtProvider(softwareRT);
+        addRtMesh(terrainMesh);
         LightManager.get().addLight(sunLight);
     }
 
@@ -118,7 +122,18 @@ public class Test extends ZenithEngine {
 
     @Override
     protected void update(float deltaTime) {
+        Vector3f oldPos = new Vector3f(getCamera().getTransform().getPosition());
+        float oldYaw = getYaw();
+        float oldPitch = getPitch();
+
         time += deltaTime;
+
+        boolean moved = oldPos.distance(getCamera().getTransform().getPosition()) > 0.01f;
+        boolean turned = Math.abs(oldYaw - getYaw()) > 0.01f || Math.abs(oldPitch - getPitch()) > 0.01f;
+
+        if (moved || turned) {
+            softwareRT.resetAccumulation();
+        }
 
         // 太阳轨迹角
         float angle = time * 0.15f;
@@ -188,6 +203,25 @@ public class Test extends ZenithEngine {
         terrainMesh.render();
     }
 
+    @Override
+    protected void onBufferToScreen(float realDeltaTime, ScreenShader screenShader) {
+        // --- 6. 后期处理适配 ---
+        // 当光追开启时，告诉后期着色器使用光追生成的 HDR 纹理
+        if (softwareRT != null) {
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, sceneFBO.getRayTraceTargetID());
+
+            screenShader.bind();
+            screenShader.setUniform("pathTraceTexture", 1);
+
+            // 传入 1.0 / sampleCount 供 output.frag 进行均值混合
+            float invSample = 1.0f / Math.max(1.0f, softwareRT.getSampleCount());
+            screenShader.setUniform("invSampleCounter", invSample);
+
+            // 启用 ACES ToneMapping，让光追的 HDR 结果看起来更真实
+            screenShader.setUniform("enableAces", true);
+        }
+    }
 
     @Override
     protected void renderAfterOpaqueScene() {
