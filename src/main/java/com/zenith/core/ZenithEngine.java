@@ -284,15 +284,11 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
             }
 
             if (RayTracingConfig.ENABLE_RAY_TRACING && rtProvider != null) {
-                float[] clearColor = {0f, 0f, 0f, 0f};
-                glClearTexImage(sceneFBO.getRayTraceTargetID(), 0, GL_RGBA, GL_FLOAT, clearColor);
-
                 if (RayTracingConfig.DYNAMIC_AS_UPDATE) {
                     rtProvider.buildAccelerationStructures(rtMeshes);
                 }
 
                 rtProvider.trace(sceneFBO, camera);
-
                 org.lwjgl.opengl.GL42.glMemoryBarrier(org.lwjgl.opengl.GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
             }
 
