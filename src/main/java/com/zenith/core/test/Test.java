@@ -3,16 +3,12 @@ package com.zenith.core.test;
 import com.zenith.asset.AssetResource;
 import com.zenith.core.ZenithEngine;
 import com.zenith.render.VertexLayout;
-import com.zenith.render.backend.opengl.GLWindow;
-import com.zenith.render.backend.opengl.GLMaterial;
-import com.zenith.render.backend.opengl.GLMesh;
-import com.zenith.render.backend.opengl.LightManager;
+import com.zenith.render.backend.opengl.*;
 import com.zenith.render.backend.opengl.shader.*;
 import com.zenith.common.math.Color;
 import com.zenith.render.backend.opengl.texture.GLTexture;
 import org.joml.Vector3f;
 import org.joml.Matrix4f;
-import org.joml.Vector4f;
 
 import java.io.IOException;
 
@@ -28,300 +24,213 @@ public class Test extends ZenithEngine {
     private SkyShader skyShader;
     private WaterShader waterShader;
     private TerrainShader terrainShader;
+
     private float time = 0.0f;
     private final Matrix4f viewMatrix = new Matrix4f();
     private final Matrix4f projMatrix = new Matrix4f();
-    private final Vector3f sunDir = new Vector3f();
-    private final Vector3f sunIntensityVec = new Vector3f();
     private final Vector3f camPosCached = new Vector3f();
+
+    private GLLight sunLight;
     private final TerrainShader.TerrainMaterialParams terrainParams = new TerrainShader.TerrainMaterialParams();
+
     private float[] skyBoxRawData;
     private float[] terrainRawData;
     private float[] waterRawData;
-    GLTexture grassAlbedo;
-    GLTexture grassNormal;
-    GLTexture grassRoughness;
-    GLTexture rockAlbedo;
-    GLTexture rockNormal;
-    GLTexture rockRoughness;
 
-    GLTexture waterAlbedo;
-    GLTexture waterNormal;
+    private GLTexture grassAlbedo, grassNormal, grassRoughness;
+    private GLTexture rockAlbedo, rockNormal, rockRoughness;
+    private GLTexture waterAlbedo, waterNormal;
 
     public Test() {
-        super(new GLWindow("Zenith World System - Terrain & Water", 1280, 720));
-    }
-
-
-    private void initScene() {
-        // 相机位置
-        this.getCamera().getTransform().getPosition().set(0, 80, 100);
-
-        glEnable(GL_DEPTH_TEST);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-        VertexLayout layout = createStandardLayout();
-
-        // 天空盒
-        skyShader = GLShaderRegistry.get(GLShaderRegistry.SKY);
-        skyBoxMesh = new GLMesh(generateSkyBoxData().length / 20, layout);
-        skyBoxMesh.updateVertices(generateSkyBoxData());
-
-        // 地形
-        terrainShader = new TerrainShader();
-
-        // --- 修改 Test.java ---
-        terrainParams.hasGrassMap = true;
-        terrainParams.hasRockMap = true;
-        terrainParams.hasNormalMap = true;
-        terrainParams.uvScale = 85.0f;
-        terrainParams.amplitude = 120.0f;
-        terrainParams.frequency = 0.0018f;
-        terrainParams.snowHeight = 75.0f;
-
-        terrainShader.setMaterial(terrainParams);
-
-        float[] terrainData = generatePlaneData(3000.0f, 3000.0f, 250, 250);
-        terrainMesh = new GLMesh(terrainData.length / 20, layout);
-        terrainMesh.updateVertices(terrainData);
-
-        // 水体
-        waterShader = new WaterShader();
-        GLMaterial waterMaterial = new GLMaterial(waterShader);
-
-        float[] waterData = generatePlaneData(3000.0f, 3000.0f, 300, 300);
-        GLMesh waterMesh = new GLMesh(waterData.length / 20, layout);
-        waterMesh.updateVertices(waterData);
-        this.waterEntity = new WaterEntity(waterMesh, waterMaterial);
-
-        try {
-            grassAlbedo = new GLTexture(AssetResource.loadFromResources("textures/grass/Grass004_4K-PNG_Color.png"));
-            grassNormal = new GLTexture(AssetResource.loadFromResources("textures/grass/Grass004_4K-PNG_NormalGL.png"));
-            grassRoughness = new GLTexture(AssetResource.loadFromResources("textures/grass/Grass004_4K-PNG_Roughness.png"));
-
-            rockAlbedo = new GLTexture(AssetResource.loadFromResources("textures/rock/Rock051_1K-PNG_Color.png"));
-            rockNormal = new GLTexture(AssetResource.loadFromResources("textures/rock/Rock051_1K-PNG_NormalGL.png"));
-            rockRoughness = new GLTexture(AssetResource.loadFromResources("textures/rock/Rock051_1K-PNG_Roughness.png"));
-
-            waterAlbedo = new GLTexture(AssetResource.loadFromResources("textures/water/Water_0341.jpg"));
-            waterNormal = new GLTexture(AssetResource.loadFromResources("textures/water/Water_0341normal.jpg"));
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+        super(new GLWindow("Zenith World System - Optical PBR", 1280, 720));
     }
 
     @Override
     protected void init() {
-        this.getCamera().getTransform().getPosition().set(0, 80, 100);
+        this.getCamera().getTransform().getPosition().set(0, 150, 200);
+
         glEnable(GL_DEPTH_TEST);
+        glEnable(GL_CULL_FACE);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
         VertexLayout layout = createStandardLayout();
+
         skyShader = GLShaderRegistry.get(GLShaderRegistry.SKY);
         skyBoxMesh = new GLMesh(skyBoxRawData.length / 20, layout);
         skyBoxMesh.updateVertices(skyBoxRawData);
+
         terrainShader = new TerrainShader();
         terrainParams.hasGrassMap = true;
         terrainParams.hasRockMap = true;
         terrainParams.hasNormalMap = true;
-        terrainParams.uvScale = 85.0f;
-        terrainParams.amplitude = 120.0f;
-        terrainParams.frequency = 0.0018f;
-        terrainParams.snowHeight = 75.0f;
-        terrainShader.setMaterial(terrainParams);
+        terrainParams.uvScale = 120.0f;
+        terrainParams.amplitude = 140.0f;
+        terrainParams.frequency = 0.0016f;
+        terrainParams.snowHeight = 90.0f;
+
         terrainMesh = new GLMesh(terrainRawData.length / 20, layout);
         terrainMesh.updateVertices(terrainRawData);
+
         waterShader = new WaterShader();
-        GLMaterial waterMaterial = new GLMaterial(waterShader);
         GLMesh waterMesh = new GLMesh(waterRawData.length / 20, layout);
         waterMesh.updateVertices(waterRawData);
-        this.waterEntity = new WaterEntity(waterMesh, waterMaterial);
+        this.waterEntity = new WaterEntity(waterMesh, new GLMaterial(waterShader));
+
+        sunLight = new GLLight(0);
+        sunLight.setColor(new Color(1.0f, 0.98f, 0.9f));
+        sunLight.setIntensity(1.6f);
+        sunLight.setAmbientStrength(0.18f);
+        LightManager.get().addLight(sunLight);
     }
+
     @Override
     protected void asyncLoad() {
         setLoadingProgress(0.1f);
         skyBoxRawData = generateSkyBoxData();
-
-        setLoadingProgress(0.2f);
-        terrainRawData = generatePlaneData(3000.0f, 3000.0f, 250, 250);
-
-        setLoadingProgress(0.4f);
-        waterRawData = generatePlaneData(3000.0f, 3000.0f, 300, 300);
-
-        // ==========================================
-        // 核心修改：分离 IO/CPU 解码 与 GPU 上传
-        // ==========================================
+        terrainRawData = generatePlaneData(5000.0f, 5000.0f, 256, 256);
+        waterRawData = generatePlaneData(5000.0f, 5000.0f, 300, 300);
 
         loadTextureSafe(0.50f, "textures/grass/Grass004_4K-PNG_Color.png",      tex -> grassAlbedo = tex);
         loadTextureSafe(0.55f, "textures/grass/Grass004_4K-PNG_NormalGL.png",   tex -> grassNormal = tex);
-        loadTextureSafe(0.60f, "textures/grass/Grass004_4K-PNG_Roughness.png",tex -> grassRoughness = tex);
-
+        loadTextureSafe(0.60f, "textures/grass/Grass004_4K-PNG_Roughness.png",  tex -> grassRoughness = tex);
         loadTextureSafe(0.70f, "textures/rock/Rock051_1K-PNG_Color.png",        tex -> rockAlbedo = tex);
         loadTextureSafe(0.80f, "textures/rock/Rock051_1K-PNG_NormalGL.png",     tex -> rockNormal = tex);
-        loadTextureSafe(0.90f, "textures/rock/Rock051_1K-PNG_Roughness.png",  tex -> rockRoughness = tex);
-
+        loadTextureSafe(0.90f, "textures/rock/Rock051_1K-PNG_Roughness.png",    tex -> rockRoughness = tex);
         loadTextureSafe(0.95f, "textures/water/Water_0341.jpg",                 tex -> waterAlbedo = tex);
         loadTextureSafe(1.00f, "textures/water/Water_0341normal.jpg",           tex -> waterNormal = tex);
-
-        try {
-            // 给最后一点缓冲时间，确保进度条能平滑走到 100%
-            Thread.sleep(300);
-        } catch (InterruptedException ignored) {}
     }
 
-
-    /**
-     * 高级安全加载法：彻底防止主线程卡顿
-     */
     private void loadTextureSafe(float progress, String path, java.util.function.Consumer<GLTexture> onLoaded) {
         try {
             var rawImageData = AssetResource.loadFromResources(path);
             runOnMainThread(() -> {
-                GLTexture texture = null;
                 try {
-                    texture = new GLTexture(rawImageData);
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
-                }
-                onLoaded.accept(texture);
+                    GLTexture texture = new GLTexture(rawImageData);
+                    onLoaded.accept(texture);
+                } catch (IOException e) { e.printStackTrace(); }
             });
             setLoadingProgress(progress);
         } catch (Exception e) {
-            System.err.println("加载贴图失败: " + path);
-            e.printStackTrace();
+            System.err.println("Failed to load asset: " + path);
         }
-    }
-
-    /**
-     * 辅助方法：统一处理加载异常
-     */
-    private GLTexture createTexture(String path) {
-        try {
-            return new GLTexture(AssetResource.loadFromResources(path));
-        } catch (IOException e) {
-            System.err.println("加载贴图失败: " + path);
-            e.printStackTrace();
-            return null;
-        }
-    }
-
-    @Override
-    protected void onBufferToScreen(float realDeltaTime, ScreenShader screenShader) {
-        super.onBufferToScreen(realDeltaTime, screenShader);
     }
 
     @Override
     protected void update(float deltaTime) {
+        time += deltaTime;
 
-        // 让水流动更明显
-        time += deltaTime * 1.2f;
+        // 太阳轨迹角
+        float angle = time * 0.15f;
+        float sunHeight = (float) Math.sin(angle);
+        float sunElevation = Math.max(0.0f, sunHeight);
 
-        // 太阳轨迹
-        float tilt = 0.41f;
-        sunDir.set(
-                (float) (Math.cos(time) * Math.sin(tilt)),
-                (float) (Math.sin(time)),
-                (float) (Math.cos(time) * Math.cos(tilt))
+        // 强制太阳光从天空射向地面
+        sunLight.getDirection().set(
+                -(float) Math.cos(angle),
+                -sunHeight,
+                -(float) Math.cos(angle * 0.5f)
         ).normalize();
 
-        float sunY = Math.max(0.0f, sunDir.y);
+        // 1. 设置太阳直射强度
+        sunLight.setIntensity(sunElevation * 2.5f);
 
-        Vector3f sunsetColor = new Vector3f(1.0f, 0.45f, 0.15f);
-        Vector3f noonColor = new Vector3f(1.0f, 0.98f, 0.95f);
-
-        float blend = (float) Math.pow(sunY, 0.4);
-        sunIntensityVec.set(sunsetColor).lerp(noonColor, blend);
-
-        float intensity = Math.max(0.2f, sunY * 1.2f);
-        sunIntensityVec.mul(intensity);
+        // ⭐ 2. 关键修复：设置环境光强度！
+        // 晚上(sunElevation=0)时，环境光降至 0.02 (模拟微弱的月光)，白天最高为 0.2
+        sunLight.setAmbientStrength(Math.max(0.02f, sunElevation * 0.2f));
     }
 
     @Override
     protected void renderScene() {
-        glClearColor(0.02f, 0.04f, 0.08f, 1.0f);
+        if (skyBoxMesh == null || terrainMesh == null || sunLight == null) return;
+        getCamera().getProjection().setFar(5000.0f);
+
+        glClearColor(0.01f, 0.02f, 0.03f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         viewMatrix.set(getCamera().getViewMatrix());
         projMatrix.set(getCamera().getProjection().getMatrix());
         camPosCached.set(getCamera().getTransform().getPosition());
 
-        // 天空：先关闭深度写入，避免被地形/自身深度挡掉
+        // --- 【渲染天空】 ---
+        glDisable(GL_CULL_FACE);
         glDepthMask(false);
         glDepthFunc(GL_LEQUAL);
 
         skyShader.bind();
-        Matrix4f viewNoTrans = new Matrix4f(viewMatrix);
-        viewNoTrans.m30(0);
-        viewNoTrans.m31(0);
-        viewNoTrans.m32(0);
-        skyShader.setUniform("u_ViewProjection", new Matrix4f(projMatrix).mul(viewNoTrans));
-        skyShader.setUniform("u_SunDir", sunDir);
+        Matrix4f viewNoTrans = new Matrix4f(viewMatrix).setTranslation(0, 0, 0);
+        Matrix4f skyVP = new Matrix4f(projMatrix).mul(viewNoTrans);
+        skyShader.setUniform("u_ViewProjection", skyVP);
+
+        // ⭐ 关键修复：天空盒需要的是“从地面指向太阳的位置” (向上)
+        // 所以这里克隆一份太阳光线方向(向下)，并取反(negate)变成向上，专门喂给天空盒
+        Vector3f sunPosInSky = new Vector3f(sunLight.getDirection()).negate();
+        skyShader.setUniform("u_SunDir", sunPosInSky);
+
+        skyShader.setUniform("u_Time", time);
         skyBoxMesh.render();
 
-        // 恢复默认深度状态
-        glDepthMask(true);
         glDepthFunc(GL_LESS);
+        glDepthMask(true);
+        glEnable(GL_CULL_FACE);
 
-        // 地形
-        glEnable(GL_DEPTH_TEST);
+        // --- 【渲染地形】 ---
         terrainShader.bind();
         terrainShader.setMaterial(terrainParams);
+        Matrix4f terrainModel = new Matrix4f().translate(0, -40, 0);
+        terrainShader.setUniform("u_Model", terrainModel);
         terrainShader.setUniform("u_ViewProjection", new Matrix4f(projMatrix).mul(viewMatrix));
-        terrainShader.setUniform("u_Model", new Matrix4f().translate(0, -20, 0));
-        terrainShader.setUniform("u_ViewPos", camPosCached);
-        terrainShader.setUniform("u_SunDir", sunDir);
-        terrainShader.setUniform("u_SunIntensity", sunIntensityVec);
 
+        // 地形接收的是物理系统里向下的光线，高光正常！
+        LightManager.get().apply(terrainShader, camPosCached);
         terrainShader.bindGrassMaps(grassAlbedo, grassNormal, grassRoughness);
         terrainShader.bindRockMaps(rockAlbedo, rockNormal, rockRoughness);
-
         terrainMesh.render();
     }
 
+
     @Override
     protected void renderAfterOpaqueScene() {
-        if (waterEntity == null || sceneFBO == null) return;
+        if (waterEntity == null || sceneFBO == null || waterNormal == null) return;
 
         waterShader.bind();
-        //waterShader.setMatrices(projMatrix, viewMatrix);
-        waterShader.setUniform("u_ViewProjection", new Matrix4f(projMatrix).mul(viewMatrix));
-        waterShader.setUniform("u_Model", new Matrix4f().translate(0, 50, 0));
+
+        Matrix4f vpMatrix = new Matrix4f(projMatrix).mul(viewMatrix);
+        waterShader.setUniform("u_ViewProjection", vpMatrix);
+
+        // 利用 CPU 算好逆矩阵，杜绝驱动 Bug
+        Matrix4f invVPMatrix = new Matrix4f(vpMatrix).invert();
+        waterShader.setUniform("u_InvViewProjection", invVPMatrix);
+
+        waterShader.setUniform("u_Model", new Matrix4f().translate(0, 40, 0));
+
+        // 传入安全的屏幕分辨率
         waterShader.setScreenSize(window.getWidth(), window.getHeight());
-        waterShader.setSplashes(null);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, sceneFBO.getColorCopyTex());
-        waterShader.setUniform("u_SceneColor", 8);
+        waterShader.setUniform("u_SceneColor", 0);
 
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, sceneFBO.getDepthCopyTex());
-        waterShader.setUniform("u_SceneDepth", 9);
+        waterShader.setUniform("u_SceneDepth", 1);
 
         waterShader.bindWaterNormal(waterNormal);
+        LightManager.get().apply(waterShader, camPosCached);
 
+        // ⭐ 调亮底色，确保即使没有灯光也能看见水
         waterShader.updateUniforms(
-                camPosCached,                  // 摄像机位置
-                new Color(0.01f, 0.05f, 0.12f), // 深水颜色
-                new Color(0.1f, 0.5f, 0.65f),  // 浅水颜色
-                time,                          // 时间
-                0.0f                           // 雨水强度
+                camPosCached,
+                new Color(0.05f, 0.35f, 0.55f), // 非常亮的蓝绿色
+                new Color(0.20f, 0.65f, 0.80f), // 浅水更亮
+                time,
+                0.02f
         );
 
-        waterShader.applyLights(LightManager.get(), camPosCached);
-
         glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glEnable(GL_DEPTH_TEST);
-
-        glDisable(GL_CULL_FACE);
-
         glDepthMask(false);
-
         waterEntity.getMesh().render();
-
         glDepthMask(true);
-        glEnable(GL_CULL_FACE);
     }
 
     private VertexLayout createStandardLayout() {
@@ -362,12 +271,22 @@ public class Test extends ZenithEngine {
     }
 
     private float[] generateSkyBoxData() {
-        float[] c = {-1,1,-1, -1,-1,-1, 1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, -1,-1,-1, -1,1,-1, -1,1,-1, -1,1,1, -1,-1,1, 1,-1,-1, 1,-1,1, 1,1,1, 1,1,1, 1,1,-1, 1,-1,-1, -1,-1,1, -1,1,1, 1,1,1, 1,1,1, 1,-1,1, -1,-1,1, -1,1,-1, 1,1,-1, 1,1,1, 1,1,1, -1,1,1, -1,1,-1, -1,-1,-1, -1,-1,1, 1,-1,-1, 1,-1,-1, -1,-1,1, 1,-1,1};
-        float[] d = new float[c.length / 3 * 20];
-        for (int i = 0; i < c.length / 3; i++) {
-            d[i*20] = c[i*3] * 900f;
-            d[i*20+1] = c[i*3+1] * 900f;
-            d[i*20+2] = c[i*3+2] * 900f;
+        float[] c = {
+                -1,1,-1, -1,-1,-1, 1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1,
+                -1,-1,1, -1,-1,-1, -1,1,-1, -1,1,-1, -1,1,1, -1,-1,1,
+                1,-1,-1, 1,-1,1, 1,1,1, 1,1,1, 1,1,-1, 1,-1,-1,
+                -1,-1,1, -1,1,1, 1,1,1, 1,1,1, 1,-1,1, -1,-1,1,
+                -1,1,-1, 1,1,-1, 1,1,1, 1,1,1, -1,1,1, -1,1,-1,
+                -1,-1,-1, -1,-1,1, 1,-1,-1, 1,-1,-1, -1,-1,1, 1,-1,1
+        };
+        int vertexCount = c.length / 3;
+        float[] d = new float[vertexCount * 20];
+        for (int i = 0; i < vertexCount; i++) {
+            int offset = i * 20;
+            d[offset]     = c[i * 3] * 1200f;
+            d[offset + 1] = c[i * 3 + 1] * 1200f;
+            d[offset + 2] = c[i * 3 + 2] * 1200f;
+            for(int j = 3; j < 20; j++) d[offset + j] = 0.0f;
         }
         return d;
     }

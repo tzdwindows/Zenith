@@ -82,51 +82,49 @@ out vec3 outNormal
 }
 
 // ==========================
-// 衰减
+// 衰减 (修正为更稳定的物理衰减)
 // ==========================
 float calculateAttenuation(float dist, float range) {
-    float distSq = dist * dist;
-    float att = 1.0 / max(distSq, 0.0001);
-
+    float att = 1.0 / max(dist * dist, 0.01);
+    // 使用平滑窗口函数防止硬边缘
     float factor = dist / max(range, 0.001);
     float window = clamp(1.0 - pow(factor, 4.0), 0.0, 1.0);
-
-    return att * window * window;
+    return att * (window * window);
 }
 
 // ==========================
-// 轻量 PBR BRDF
+// 轻量 PBR BRDF (修正分母溢出)
 // ==========================
 vec3 surfaceShading(PBRParams pixel, vec3 L, vec3 radiance, vec3 V, vec3 N) {
     vec3 H = normalize(V + L);
 
-    float NdotL = max(dot(N, L), 0.0);
-    float NdotV = max(dot(N, V), 0.0);
-    float NdotH = max(dot(N, H), 0.0);
-    float VdotH = max(dot(V, H), 0.0);
-
-    if (NdotL <= 0.0 || NdotV <= 0.0) {
-        return vec3(0.0);
-    }
+    float NdotL = clamp(dot(N, L), 0.001, 1.0);
+    float NdotV = clamp(dot(N, V), 0.001, 1.0);
+    float NdotH = clamp(dot(N, H), 0.0, 1.0);
+    float VdotH = clamp(dot(V, H), 0.0, 1.0);
 
     float roughness = clamp(pixel.roughness, 0.05, 1.0);
     float a = roughness * roughness;
     float a2 = a * a;
 
-    float denom = max((NdotH * NdotH) * (a2 - 1.0) + 1.0, 1e-4);
-    float D = a2 / (ZENITH_PI * denom * denom);
+    // D 项 (Trowbridge-Reitz GGX)
+    float denom = (NdotH * NdotH * (a2 - 1.0) + 1.0);
+    float D = a2 / (ZENITH_PI * denom * denom + 1e-6);
 
+    // G 项 (Smith Schlick-GGX)
     float k = (roughness + 1.0);
     k = (k * k) / 8.0;
-
     float Gv = NdotV / (NdotV * (1.0 - k) + k);
     float Gl = NdotL / (NdotL * (1.0 - k) + k);
     float G = Gv * Gl;
 
+    // F 项 (Schlick)
     vec3 F0 = mix(pixel.f0, pixel.diffuseColor, pixel.metallic);
-    vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
+    vec3 F = F0 + (1.0 - F0) * pow(clamp(1.0 - VdotH, 0.0, 1.0), 5.0);
 
-    vec3 spec = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-4);
+    // 修正溢出隐患的分母
+    vec3 spec = (D * G * F) / (4.0 * NdotV * NdotL + 0.001);
+
     vec3 kd = (1.0 - F) * (1.0 - pixel.metallic);
     vec3 diff = kd * pixel.diffuseColor / ZENITH_PI;
 
@@ -134,54 +132,51 @@ vec3 surfaceShading(PBRParams pixel, vec3 L, vec3 radiance, vec3 V, vec3 N) {
 }
 
 // ==========================
-// 多光源照明
+// 多光源照明 (修正环境光累加问题)
 // ==========================
 vec3 evaluateLights(PBRParams pixel, vec3 N, vec3 V, vec3 worldPos) {
     vec3 Lo = vec3(0.0);
-    vec3 ambient = vec3(0.0);
+    vec3 totalAmbient = vec3(0.0); // 修改：统一计算环境光
 
-    // 【修改点】将 u_LightCount 转回 int 用于循环
-    int count = int(u_LightCount);
+    int count = int(min(u_LightCount, 16.0));
 
     for (int i = 0; i < count; i++) {
         Light light = u_Lights[i];
-
         vec3 L = vec3(0.0);
         float attenuation = 1.0;
 
-        // 【修改点】使用 float 范围判断 type
         if (light.type < 0.5) {
-            // 相当于 == 0 (Directional)
+            // Directional Light
             L = normalize(-light.direction);
-            ambient += pixel.diffuseColor * light.color.rgb * light.ambientStrength;
+            // 修正：环境光只根据主光源（通常是第一盏平行光）计算一次，防止叠加泛白
+            if (i == 0) {
+                totalAmbient = pixel.diffuseColor * light.color.rgb * light.ambientStrength;
+            }
         } else {
             // Point 或 Spot
             vec3 lightVec = light.position - worldPos;
             float dist = length(lightVec);
-            if (dist < 1e-4) {
-                continue;
-            }
+            if (dist > light.range) continue;
 
-            L = lightVec / dist;
+            L = normalize(lightVec);
             attenuation = calculateAttenuation(dist, light.range);
-            if (light.type > 1.5) {
+
+            if (light.type > 1.5) { // Spot
                 float theta = dot(L, normalize(-light.direction));
-                float epsilon = max(light.innerCutOff - light.outerCutOff, 1e-4);
-                float spot = clamp((theta - light.outerCutOff) / epsilon, 0.0, 1.0);
+                float epsilon = light.innerCutOff - light.outerCutOff;
+                float spot = clamp((theta - light.outerCutOff) / max(epsilon, 0.0001), 0.0, 1.0);
                 attenuation *= spot;
             }
         }
 
-        // 【修改点】判断是否是平行光或者衰减 > 0
-        if (attenuation > 0.0 || light.type < 0.5) {
+        if (attenuation > 0.0) {
             vec3 radiance = light.color.rgb * light.intensity * attenuation;
             Lo += surfaceShading(pixel, L, radiance, V, N);
         }
     }
 
-    return Lo + ambient;
+    return Lo + totalAmbient;
 }
-
 
 // ==========================
 // 地形专用入口
@@ -196,7 +191,7 @@ float roughness
     PBRParams p;
     p.diffuseColor = albedo;
     p.f0 = vec3(0.04);
-    p.roughness = clamp(roughness, 0.05, 1.0);
+    p.roughness = clamp(roughness, 0.1, 1.0); // 调高基础粗糙度防止刺眼
     p.metallic = 0.0;
 
     return evaluateLights(p, N, V, worldPos);

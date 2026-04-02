@@ -16,7 +16,6 @@ public class AnimationShader extends GLShader {
 
     private static final int MAX_LIGHTS = 16;
     private final List<GLLight> lights = new ArrayList<>();
-    public static final boolean FORCE_DEBUG_VISUALS = false;
 
     // =========================
     // Vertex Shader (保持不变)
@@ -41,7 +40,6 @@ public class AnimationShader extends GLShader {
                 "out vec3 vNormal;\n" +
                 "out vec3 vWorldPos;\n" +
                 "out vec4 vColor;\n" +
-                "out vec4 vDebugColor;\n" +
 
                 "void main() {\n" +
                 "    mat4 skinMat = mat4(0.0);\n" +
@@ -67,7 +65,7 @@ public class AnimationShader extends GLShader {
     }
 
     // =========================
-    // Fragment Shader (同步修改 float 类型)
+    // Fragment Shader (修复冲突与包含顺序)
     // =========================
     private static String getFragmentSource() {
         return "#version 330 core\n" +
@@ -79,27 +77,11 @@ public class AnimationShader extends GLShader {
                 "    float metallic;\n" +
                 "};\n" +
 
-                // 注意：这里确保 u_LightCount 是 float，Light.type 是 float
-                // 这样才能和 Java 端的传递以及你的 lighting.glsl 修改版本匹配
-                "struct Light {\n" +
-                "    float type;\n" +
-                "    vec3 position;\n" +
-                "    vec3 direction;\n" +
-                "    vec4 color;\n" +
-                "    float intensity;\n" +
-                "    float range;\n" +
-                "    float innerCutOff;\n" +
-                "    float outerCutOff;\n" +
-                "    float ambientStrength;\n" +
-                "};\n" +
-                "uniform Light u_Lights[16];\n" +
-                "uniform float u_LightCount;\n" + // 改为 float
-
                 "#include \"common_math.glsl\"\n" +
                 "#include \"brdf.glsl\"\n" +
-                "#include \"shading_indirect.glsl\"\n" +
                 "#include \"surface_shading.glsl\"\n" +
                 "#include \"lighting.glsl\"\n" +
+                "#include \"shading_indirect.glsl\"\n" +
 
                 "in vec2 vTexCoord;\n" +
                 "in vec3 vNormal;\n" +
@@ -124,7 +106,7 @@ public class AnimationShader extends GLShader {
                 "    vec3 V = normalize(u_ViewPos - vWorldPos);\n" +
 
                 "    vec3 rawColor = u_BaseColor.rgb * texColor.rgb;\n" +
-                "    vec3 baseColor = pow(rawColor, vec3(2.2));\n" +
+                "    vec3 baseColor = pow(max(rawColor, 0.0), vec3(2.2));\n" +
 
                 "    float metallic = clamp(u_BaseColor.a, 0.0, 1.0);\n" +
                 "    float roughness = 0.5;\n" +
@@ -135,15 +117,18 @@ public class AnimationShader extends GLShader {
                 "    pixel.roughness = roughness;\n" +
                 "    pixel.metallic = metallic;\n" +
 
-                "    vec3 Lo = evaluateIBL(pixel, N, V);\n" +
+                "    vec3 Lo = vec3(0.0);\n" +
+                "    // 如果你的系统支持 IBL\n" +
+                "    // Lo += evaluateIBL(pixel, N, V);\n" +
                 "    Lo += evaluateLights(pixel, N, V, vWorldPos);\n" +
 
                 "    if (u_IsEmissive > 0.5) {\n" +
                 "        Lo += u_EmissiveColor * u_EmissiveIntensity;\n" +
                 "    }\n" +
 
-                "    Lo = finalizeColor(Lo);\n" +
-                "    FragColor = vec4(Lo, texColor.a * u_BaseColor.a);\n" +
+                "    // ACES Tone Mapping\n" +
+                "    Lo = (Lo * (2.51 * Lo + 0.03)) / (Lo * (2.43 * Lo + 0.59) + 0.14);\n" +
+                "    FragColor = vec4(pow(max(Lo, 0.0), vec3(1.0/2.2)), texColor.a * u_BaseColor.a);\n" +
                 "}\n";
     }
 
@@ -158,8 +143,6 @@ public class AnimationShader extends GLShader {
         this.setUniform("u_BaseColor", new Vector4f(color.r, color.g, color.b, color.a));
 
         this.setUniform("u_DiffuseMap", 0);
-        this.setUniform("u_iblSpecular", 1);
-        this.setUniform("u_dfgLUT", 2);
 
         int blockIndex = glGetUniformBlockIndex(getRendererID_Internal(), "BoneBlock");
         if (blockIndex != GL_INVALID_INDEX) {
@@ -174,29 +157,28 @@ public class AnimationShader extends GLShader {
         this.bind();
         this.setUniform("u_ViewPos", viewPos != null ? viewPos : new Vector3f(0));
 
-        // 修复 1：将数量作为 float 传递，防止 GLSL int 接收失败
-        float count = (float) Math.min(lights.size(), MAX_LIGHTS);
+        // ⭐ 修复 2：回归 int 类型。GLSL 330 里的循环迭代器必须是 int。
+        // 如果你的 GLShader 只有 setUniform(String, float)，请在该类中添加 setUniform(String, int)
+        int count = Math.min(lights.size(), MAX_LIGHTS);
         this.setUniform("u_LightCount", count);
 
-        for (int i = 0; i < (int)count; i++) {
+        for (int i = 0; i < count; i++) {
             GLLight l = lights.get(i);
             String prefix = "u_Lights[" + i + "].";
 
-            // 修复 2：将 type 转为 float
-            this.setUniform(prefix + "type", (float)l.getType());
+            // ⭐ 修复 3：Light 结构体中的 type 必须是 int，对应 calculateAttenuation 等逻辑
+            this.setUniform(prefix + "type", l.getType());
 
-            // 修复 3：空值保护
             this.setUniform(prefix + "position", l.getPosition() != null ? l.getPosition() : new Vector3f(0));
             this.setUniform(prefix + "direction", l.getDirection() != null ? l.getDirection() : new Vector3f(0, -1, 0));
 
-            // 修复 4：将 Color 对象显式转为 Vector4f
             Color c = l.getColor();
             this.setUniform(prefix + "color", new Vector4f(c.r, c.g, c.b, c.a));
 
             this.setUniform(prefix + "intensity", l.getIntensity());
             this.setUniform(prefix + "range", l.getRange() > 0 ? l.getRange() : 1000.0f);
-            this.setUniform(prefix + "innerCutOff", l.getInnerCutOff());
-            this.setUniform(prefix + "outerCutOff", l.getOuterCutOff());
+            this.setUniform(prefix + "innerCutOff", (float)Math.cos(Math.toRadians(l.getInnerCutOff())));
+            this.setUniform(prefix + "outerCutOff", (float)Math.cos(Math.toRadians(l.getOuterCutOff())));
             this.setUniform(prefix + "ambientStrength", l.getAmbientStrength());
         }
     }
@@ -211,7 +193,9 @@ public class AnimationShader extends GLShader {
     }
 
     public void addLight(GLLight light) {
-        if (lights.size() < MAX_LIGHTS) lights.add(light);
+        if (!lights.contains(light) && lights.size() < MAX_LIGHTS) {
+            lights.add(light);
+        }
     }
 
     public void clearLights() {

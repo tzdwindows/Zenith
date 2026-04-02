@@ -145,7 +145,7 @@ public class Test6 {
             //waterShader.setMatrices(proj, view);
             waterShader.setUniform("u_ViewProjection", new Matrix4f(proj).mul(view));
             waterShader.setUniform("u_Model", new Matrix4f().translation(0, 0, 0));
-            waterShader.setScreenSize(winWidth, winHeight);
+            //waterShader.setScreenSize(winWidth, winHeight);
 
             // 因为这是测试用例，我们没有法线贴图，传null即可使用平滑物理计算
             waterShader.bindWaterNormal(null);
@@ -159,7 +159,7 @@ public class Test6 {
                     0.9f // 下雨强度非常大
             );
             waterShader.applyLights(LightManager.get(), camPos);
-            waterShader.setSplashes(splashData);
+            //waterShader.setSplashes(splashData);
             waterMesh.render();
 
             glDepthMask(true);

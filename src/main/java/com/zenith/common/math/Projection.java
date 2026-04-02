@@ -113,4 +113,17 @@ public class Projection {
         }
         return projectionMatrix;
     }
+
+    public void setFar(float far) {
+        this.zFar = far;
+        this.dirty = true;
+    }
+
+    public void setNear(float near) {
+        this.zNear = near;
+        this.dirty = true;
+    }
+    public float getFar() {
+        return zFar;
+    }
 }

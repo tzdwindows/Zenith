@@ -1,3 +1,6 @@
+/**
+*   lighting.glsl
+**/
 #ifndef ZENITH_LIGHTING_GLSL
 #define ZENITH_LIGHTING_GLSL
 

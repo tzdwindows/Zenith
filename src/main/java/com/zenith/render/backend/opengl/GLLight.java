@@ -39,6 +39,18 @@ public class GLLight extends Light {
     }
 
     /**
+     * 核心构造函数：允许通过类型初始化
+     * @param type 光源类型 (0: Directional, 1: Point, 2: Spot)
+     */
+    public GLLight(int type) {
+        super(Color.WHITE, 1.0f);
+        this.type = type;
+        if (type == TYPE_DIRECTIONAL) {
+            this.direction.set(0, -1, 0);
+        }
+    }
+
+    /**
      * [核心修复] 重新添加旧版构造函数，以兼容 TestLightSystem
      * 将其默认映射为点光源 (TYPE_POINT)
      */

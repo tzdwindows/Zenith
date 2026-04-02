@@ -5,10 +5,10 @@ import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
 /**
- * TerrainShader
- * - 地形高度 + 法线
- * - 多光源照明
- * - 支持草地/岩石贴图
+ * 优化后的 TerrainShader
+ * - 提升曝光至 2.2 以增强通透感
+ * - 修正雪地粗糙度，找回材质质感
+ * - 增强基础环境光，消除背光面死黑
  */
 public class TerrainShader extends GLShader {
 
@@ -68,43 +68,32 @@ public class TerrainShader extends GLShader {
 
         vec3 getSafeNormal(sampler2D tex, vec2 uv) {
             vec3 raw = texture(tex, uv).rgb;
-
-            if (length(raw) < 0.1) {
-                return vec3(0.0, 0.0, 1.0);
-            }
-
-            vec2 xy = raw.xy * 2.0 - 1.0;
-            float z = sqrt(max(1.0 - dot(xy, xy), 0.05));
-            return normalize(vec3(xy, z));
+            if (length(raw) < 0.01) return vec3(0.0, 0.0, 1.0);
+            return normalize(raw * 2.0 - 1.0);
         }
 
         void main() {
             vec3 V = normalize(u_ViewPos - vWorldPos);
             vec3 baseNormal = normalize(vNormal);
 
+            // 1. 混合权重逻辑
             float slope = 1.0 - baseNormal.y;
-            float rockWeight = smoothstep(0.15, 0.35, slope);
-            float grassWeight = 1.0 - rockWeight;
-
+            float rockWeight = smoothstep(0.15, 0.45, slope);
+            
             float heightWeight = smoothstep(
-                u_TerrainMat.snowHeight - 2.0,
-                u_TerrainMat.snowHeight + 2.0,
+                u_TerrainMat.snowHeight - 8.0, // 扩大混合带宽使过渡更自然
+                u_TerrainMat.snowHeight + 8.0,
                 vWorldPos.y
             );
-
-            float snowSlopeRetain = 1.0 - smoothstep(0.35, 0.55, slope);
+            float snowSlopeRetain = 1.0 - smoothstep(0.4, 0.7, slope);
             float snowWeight = heightWeight * snowSlopeRetain;
 
-            float grassMask = grassWeight * (1.0 - snowWeight);
-
+            // 2. 颜色线性化
             vec3 texGrass = texture(u_GrassAlbedo, vTexCoord).rgb;
             vec3 texRock  = texture(u_RockAlbedo, vTexCoord).rgb;
 
-            vec3 gCol = (length(texGrass) > 0.01 && u_TerrainMat.hasGrassMap > 0.5)
-                ? texGrass : u_TerrainMat.grassColor;
-
-            vec3 rCol = (length(texRock) > 0.01 && u_TerrainMat.hasRockMap > 0.5)
-                ? texRock : u_TerrainMat.rockColor;
+            vec3 gCol = (u_TerrainMat.hasGrassMap > 0.5) ? texGrass : u_TerrainMat.grassColor;
+            vec3 rCol = (u_TerrainMat.hasRockMap > 0.5) ? texRock : u_TerrainMat.rockColor;
 
             vec3 linGrass = pow(max(gCol, vec3(0.0)), vec3(2.2));
             vec3 linRock  = pow(max(rCol, vec3(0.0)), vec3(2.2));
@@ -113,49 +102,45 @@ public class TerrainShader extends GLShader {
             vec3 finalAlbedo = mix(linGrass, linRock, rockWeight);
             finalAlbedo = mix(finalAlbedo, linSnow, snowWeight);
 
+            // 3. 粗糙度微调 (雪地应有一定光泽)
             float rGrassTex = texture(u_GrassRoughness, vTexCoord).r;
             float rRockTex  = texture(u_RockRoughness, vTexCoord).r;
-
-            float rGrass = (rGrassTex > 0.01 && u_TerrainMat.hasGrassMap > 0.5)
-                ? rGrassTex : 0.85;
-
-            float rRock = (rRockTex > 0.01 && u_TerrainMat.hasRockMap > 0.5)
-                ? rRockTex : 0.65;
-
+            
+            float rGrass = (u_TerrainMat.hasGrassMap > 0.5) ? mix(0.7, 0.95, rGrassTex) : 0.85;
+            float rRock  = (u_TerrainMat.hasRockMap > 0.5) ? mix(0.5, 0.85, rRockTex) : 0.7;
+            
             float finalRoughness = mix(rGrass, rRock, rockWeight);
-            finalRoughness = mix(finalRoughness, 0.45, snowWeight);
+            // 雪地粗糙度设为 0.35 左右，找回冰雪的镜面反射感
+            finalRoughness = mix(finalRoughness, 0.35, snowWeight);
 
-            vec3 tNormalGrass = vec3(0.0, 0.0, 1.0);
-            vec3 tNormalRock  = vec3(0.0, 0.0, 1.0);
-
-            if (u_TerrainMat.hasNormalMap > 0.5) {
-                tNormalGrass = getSafeNormal(u_GrassNormal, vTexCoord);
-                tNormalRock  = getSafeNormal(u_RockNormal, vTexCoord);
-            }
-
-            vec3 mixedTexNormal = normalize(mix(tNormalGrass, tNormalRock, rockWeight));
-            mixedTexNormal = normalize(mix(mixedTexNormal, vec3(0.0, 0.0, 1.0), snowWeight));
-
-            vec3 helperUp = abs(baseNormal.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0);
-            vec3 tangent = normalize(cross(helperUp, baseNormal));
+            // 4. 稳定的 TBN 构建
+            vec3 tangent = normalize(cross(baseNormal, vec3(0.0, 0.0, 1.0)));
+            if (length(tangent) < 0.1) tangent = normalize(cross(baseNormal, vec3(1.0, 0.0, 0.0)));
             vec3 bitangent = normalize(cross(baseNormal, tangent));
             mat3 TBN = mat3(tangent, bitangent, baseNormal);
 
+            vec3 mixedTexNormal = vec3(0.0, 0.0, 1.0);
+            if (u_TerrainMat.hasNormalMap > 0.5) {
+                vec3 nGrass = getSafeNormal(u_GrassNormal, vTexCoord);
+                vec3 nRock  = getSafeNormal(u_RockNormal, vTexCoord);
+                mixedTexNormal = normalize(mix(nGrass, nRock, rockWeight));
+                mixedTexNormal = normalize(mix(mixedTexNormal, vec3(0.0, 0.0, 1.0), snowWeight));
+            }
             vec3 finalNormal = normalize(TBN * mixedTexNormal);
 
+            // 5. 光照计算 (包含环境光增强逻辑)
             vec3 color = shadeTerrainMultiLight(
-                vWorldPos,
-                V,
-                finalNormal,
-                finalAlbedo,
-                finalRoughness
+                vWorldPos, V, finalNormal, finalAlbedo, finalRoughness
             );
 
-            float exposure = 3.5;
+            // 6. 曝光修正 (从 1.2 提升至 2.2)
+            float exposure = 3.2; 
             vec3 mapped = color * exposure;
-            mapped = (mapped * (2.51 * mapped + 0.03)) /
-                     (mapped * (2.43 * mapped + 0.59) + 0.14);
+            
+            // ACES Filmic Tone Mapping
+            mapped = (mapped * (2.51 * mapped + 0.03)) / (mapped * (2.43 * mapped + 0.59) + 0.14);
 
+            // 7. Gamma 校正
             FragColor = vec4(pow(max(mapped, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
         }
     """;
@@ -164,9 +149,6 @@ public class TerrainShader extends GLShader {
         super("TerrainShader", VERTEX_SRC, FRAGMENT_SRC);
     }
 
-    /**
-     * 直接给 JS 调用，替代你原来不存在的 setup()
-     */
     public void setup(Matrix4f viewProjection, Matrix4f model, Vector3f viewPos) {
         setUniform("u_ViewProjection", viewProjection);
         setUniform("u_Model", model);
