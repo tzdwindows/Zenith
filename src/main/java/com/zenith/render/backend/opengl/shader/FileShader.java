@@ -40,11 +40,9 @@ public class FileShader extends GLShader {
     public static FileShader load(String name, String vertPath, String fragPath) {
         AssetResource vert = AssetResource.loadFromResources(vertPath);
         AssetResource frag = AssetResource.loadFromResources(fragPath);
-
         if (vert == null || frag == null) {
             throw new RuntimeException("Shader 资源加载失败: " + vertPath + " 或 " + fragPath);
         }
-
         return new FileShader(name, vert, frag);
     }
 
@@ -67,7 +65,7 @@ public class FileShader extends GLShader {
     private void setupHotReload() {
         // 顶点着色器更新回调
         vertexResource.onUpdate(res -> {
-            InternalLogger.info("检测到顶点着色器更新: " + name); // 直接使用基类继承的 name 字段
+            InternalLogger.info("检测到顶点着色器更新: " + name);
             recompile();
         });
 
@@ -79,17 +77,17 @@ public class FileShader extends GLShader {
     }
 
     /**
-     * 重新编译流程
-     * 注意：由于 GLShader 的 rendererID 是 final 且在构造函数中初始化，
-     * 完整的热重载通常需要 GLShader 提供一个重载/更新的方法。
-     * 如果基类不支持，此处建议通过重新实例化 Shader 对象来处理。
+     * 执行重新编译流程。
+     * 当 AssetResource 监测到磁盘文件变化时，由回调函数触发。
      */
     public void recompile() {
         String newVert = readResourceSafe(vertexResource);
         String newFrag = readResourceSafe(fragmentResource);
-
-        // 逻辑占位：此处应调用基类的 reload 或重新编译方法
-        // 如果基类没有实现 reload，你可能需要在 GLShader 中添加该功能以更新 rendererID
-        InternalLogger.warn("Shader 重载功能需要在 GLShader 基类中支持 rendererID 的更新");
+        if (newVert.isEmpty() || newFrag.isEmpty()) {
+            InternalLogger.error("重载失败：无法读取源码或源码为空内容。");
+            return;
+        }
+        compileAndLink(newVert, newFrag);
+        InternalLogger.info("Shader [" + name + "] 热重载完成。");
     }
 }

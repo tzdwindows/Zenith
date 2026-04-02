@@ -21,7 +21,7 @@ public class AnimationShader extends GLShader {
     // Vertex Shader (保持不变)
     // =========================
     private static String getVertexSource() {
-        return "#version 330 core\n" +
+        return "#version 450 core\n" +
                 "layout (location = 0) in vec3 aPos;\n" +
                 "layout (location = 1) in vec2 aTexCoord;\n" +
                 "layout (location = 2) in vec3 aNormal;\n" +
@@ -68,7 +68,7 @@ public class AnimationShader extends GLShader {
     // Fragment Shader (修复冲突与包含顺序)
     // =========================
     private static String getFragmentSource() {
-        return "#version 330 core\n" +
+        return "#version 450 core\n" +
 
                 "struct PBRParams {\n" +
                 "    vec3  diffuseColor;\n" +
@@ -77,6 +77,8 @@ public class AnimationShader extends GLShader {
                 "    float metallic;\n" +
                 "};\n" +
 
+                // ⭐ 核心修复 1：先包含头文件。u_Lights 和 u_LightCount 已经在 lighting.glsl 中定义了。
+                // 绝对不要在这里手动写 uniform Light u_Lights[16]，否则会冲突。
                 "#include \"common_math.glsl\"\n" +
                 "#include \"brdf.glsl\"\n" +
                 "#include \"surface_shading.glsl\"\n" +
