@@ -46,25 +46,48 @@ public class SoftwarePathTracerProvider implements RayTracingProvider {
     @Override
     public void buildAccelerationStructures(List<Mesh> meshes) {
         float[] originalVertices = GeomUtils.flatten(meshes);
-        BVHBuilder builder = new BVHBuilder(originalVertices, vertexStride);
 
-        // 构建 BVH 数据
+        // 核心修复：将引擎的 20 跨度转为光追的 12 跨度 (3个vec4)
+        int engineStride = 20;
+        int rtStride = 12;
+
+        // 1. 用原始 20 跨度构建 BVH 索引
+        BVHBuilder builder = new BVHBuilder(originalVertices, engineStride);
         float[] bvhData = builder.build();
 
-        // 根据 BVH 排序后的索引重排顶点，确保缓存局部性
-        float[] reorderedVertices = new float[originalVertices.length];
         int[] finalIndices = builder.getTriIndices();
+        float[] reorderedVertices = new float[finalIndices.length * 3 * rtStride];
+
+        // 2. 重新打包数据：只提取 Pos(3), Normal(3), UV(2) 并补齐到 vec4
         for (int i = 0; i < finalIndices.length; i++) {
             int oldIdx = finalIndices[i];
-            // 每一个三角形 index 对应 3 个顶点，每个顶点偏移 vertexStride
-            System.arraycopy(originalVertices, oldIdx * 3 * vertexStride,
-                    reorderedVertices, i * 3 * vertexStride, 3 * vertexStride);
-        }
-        vertexCount = reorderedVertices.length / vertexStride;
+            for (int v = 0; v < 3; v++) {
+                int srcBase = (oldIdx * 3 + v) * engineStride;
+                int dstBase = (i * 3 + v) * rtStride;
 
+                // Position (vec4)
+                reorderedVertices[dstBase + 0] = originalVertices[srcBase + 0];
+                reorderedVertices[dstBase + 1] = originalVertices[srcBase + 1];
+                reorderedVertices[dstBase + 2] = originalVertices[srcBase + 2];
+                reorderedVertices[dstBase + 3] = 1.0f;
+
+                // Normal (vec4)
+                reorderedVertices[dstBase + 4] = originalVertices[srcBase + 3];
+                reorderedVertices[dstBase + 5] = originalVertices[srcBase + 4];
+                reorderedVertices[dstBase + 6] = originalVertices[srcBase + 5];
+                reorderedVertices[dstBase + 7] = 0.0f;
+
+                // TexCoord (vec4)
+                reorderedVertices[dstBase + 8] = originalVertices[srcBase + 6];
+                reorderedVertices[dstBase + 9] = originalVertices[srcBase + 7];
+                reorderedVertices[dstBase + 10] = 0.0f;
+                reorderedVertices[dstBase + 11] = 0.0f;
+            }
+        }
+
+        vertexCount = reorderedVertices.length / rtStride;
         vertexBuffer.setData(reorderedVertices);
         bvhBuffer.setData(bvhData);
-
         resetAccumulation();
     }
 
@@ -81,24 +104,37 @@ public class SoftwarePathTracerProvider implements RayTracingProvider {
 
         glBindImageTexture(0, fbo.getRayTraceTargetID(), 0, false, 0, GL_READ_WRITE, GL_RGBA16F);
 
-        // 设置相机 Uniforms
-        computeShader.setUniform("camera.position", camera.getTransform().getPosition());
-        computeShader.setUniform("camera.forward", camera.getForward());
-        computeShader.setUniform("camera.up", camera.getUp());
-        computeShader.setUniform("camera.right", camera.getRight());
-        computeShader.setUniform("camera.fov", camera.getProjection().getFov());
-        // 如果你的相机没有设置这些，给默认值防止 NaN
-        computeShader.setUniform("camera.focalDist", 1.0f);
-        computeShader.setUniform("camera.aperture", 0.0f);
+        org.joml.Matrix4f invVP = new org.joml.Matrix4f(camera.getProjection().getMatrix())
+                .mul(camera.getViewMatrix())
+                .invert();
+        computeShader.setUniform("u_InvViewProj", invVP);
+        computeShader.setUniform("u_CamPos", camera.getTransform().getPosition());
+
+        // 【新增参数：为景深准备的相机方向向量】
+        computeShader.setUniform("u_CamForward", camera.getForward());
+        computeShader.setUniform("u_CamRight", camera.getRight());
+        computeShader.setUniform("u_CamUp", camera.getUp());
+
+        // 【新增参数：画质与景深控制】
+        computeShader.setUniform("u_MaxBounces", 3);       // 反弹3次，兼顾性能与全局光照
+        computeShader.setUniform("u_Aperture", 0.0f);      // 0.0为关闭景深。想要电影感可设为 0.02f
+        computeShader.setUniform("u_FocalDist", 50.0f);    // 对焦距离
+
+        // 【新增参数：物理天空与阳光】
+        // 找你的引擎中太阳的方向 (这里给个默认好莱坞顺光角度)
+        org.joml.Vector3f sunDir = new org.joml.Vector3f(0.5f, 0.6f, -0.5f).normalize();
+        computeShader.setUniform("u_SunDirection", sunDir);
+        computeShader.setUniform("u_SunColor", new org.joml.Vector3f(15.0f, 13.0f, 10.0f)); // 耀眼暖光
+        computeShader.setUniform("u_SunRadius", 0.02f);    // 数值越大，地面阴影越柔和(软阴影)
+        computeShader.setUniform("u_RTMode", com.zenith.common.config.RayTracingConfig.RT_MODE);
 
         computeShader.setUniform("u_VertexCount", vertexCount);
         computeShader.setUniform("u_SampleCount", sampleCount);
-        computeShader.setUniform("u_VertexStride", vertexStride);
-        computeShader.setUniform("numOfLights", 0); // 暂时没有灯光
 
         glDispatchCompute((int)Math.ceil(fbo.getWidth()/8.0), (int)Math.ceil(fbo.getHeight()/8.0), 1);
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
     }
+
 
     @Override
     public void dispose() {

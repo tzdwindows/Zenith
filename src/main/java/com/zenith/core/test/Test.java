@@ -47,6 +47,7 @@ public class Test extends ZenithEngine {
     @Override
     protected void init() {
         this.getCamera().getTransform().getPosition().set(0, 150, 200);
+        this.cameraPitch = -15.0f;
 
         glEnable(GL_DEPTH_TEST);
         glEnable(GL_CULL_FACE);
@@ -92,8 +93,8 @@ public class Test extends ZenithEngine {
     protected void asyncLoad() {
         setLoadingProgress(0.1f);
         skyBoxRawData = generateSkyBoxData();
-        terrainRawData = generatePlaneData(5000.0f, 5000.0f, 256, 256);
-        waterRawData = generatePlaneData(5000.0f, 5000.0f, 300, 300);
+        terrainRawData = generatePlaneData(5000.0f, 5000.0f, 32, 32);
+        waterRawData = generatePlaneData(5000.0f, 5000.0f, 32, 32);
 
         loadTextureSafe(0.50f, "textures/grass/Grass004_4K-PNG_Color.png",      tex -> grassAlbedo = tex);
         loadTextureSafe(0.55f, "textures/grass/Grass004_4K-PNG_NormalGL.png",   tex -> grassNormal = tex);
@@ -208,23 +209,18 @@ public class Test extends ZenithEngine {
         // --- 6. 后期处理适配 ---
         // 当光追开启时，告诉后期着色器使用光追生成的 HDR 纹理
         if (softwareRT != null) {
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, sceneFBO.getRayTraceTargetID());
-
             screenShader.bind();
-            screenShader.setUniform("pathTraceTexture", 1);
-
-            // 传入 1.0 / sampleCount 供 output.frag 进行均值混合
             float invSample = 1.0f / Math.max(1.0f, softwareRT.getSampleCount());
             screenShader.setUniform("invSampleCounter", invSample);
-
-            // 启用 ACES ToneMapping，让光追的 HDR 结果看起来更真实
             screenShader.setUniform("enableAces", true);
         }
     }
 
     @Override
     protected void renderAfterOpaqueScene() {
+        if (com.zenith.common.config.RayTracingConfig.RT_MODE == 0) {
+            return;
+        }
         if (waterEntity == null || sceneFBO == null || waterNormal == null) return;
 
         waterShader.bind();

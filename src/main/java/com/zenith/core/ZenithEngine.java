@@ -290,6 +290,10 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
 
                 rtProvider.trace(sceneFBO, camera);
                 org.lwjgl.opengl.GL42.glMemoryBarrier(org.lwjgl.opengl.GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+                // 【核心修复】：只要开启了光追，必须把光追的结果拷贝到主画布 colorTex 上！
+                // 不再限制 RT_MODE == 0
+                sceneFBO.blitRTtoColor();
             }
 
             sceneFBO.copyToHistory();

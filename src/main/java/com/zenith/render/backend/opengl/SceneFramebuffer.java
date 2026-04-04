@@ -128,6 +128,23 @@ public class SceneFramebuffer {
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     }
 
+    public void blitRTtoColor() {
+        if (copyFbo == 0) return;
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, copyFbo);
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, rayTraceTex, 0);
+
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTex, 0);
+
+        glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, copyFbo);
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorCopyTex, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+
+
     /**
      * 将 FBO 内容最终呈现到屏幕
      * 自动处理光栅化与光追纹理的切换
@@ -137,15 +154,12 @@ public class SceneFramebuffer {
         ensureResources();
 
         screenShader.bind();
+
+        // 永远把叠加好透明物体的主画布绑在 0 号位
         glActiveTexture(GL_TEXTURE0);
-
-        if (com.zenith.common.config.RayTracingConfig.ENABLE_RAY_TRACING) {
-            glBindTexture(GL_TEXTURE_2D, rayTraceTex);
-        } else {
-            glBindTexture(GL_TEXTURE_2D, colorTex);
-        }
-
+        glBindTexture(GL_TEXTURE_2D, colorTex);
         screenShader.setUniform("u_Texture", 0);
+
         glBindVertexArray(quadVao);
         glDrawArrays(GL_TRIANGLES, 0, 6);
         glBindVertexArray(0);

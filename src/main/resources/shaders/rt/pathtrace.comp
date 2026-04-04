@@ -1,20 +1,11 @@
 #version 430 core
 
+#define PI 3.14159265359
+
 struct Vertex {
     vec4 position;
     vec4 normal;
     vec4 texCoord;
-};
-
-struct Camera {
-    vec3 position;
-    float fov;
-    vec3 forward;
-    float aperture;
-    vec3 up;
-    float focalDist;
-    vec3 right;
-    float _pad0;
 };
 
 struct BVHNode {
@@ -24,255 +15,140 @@ struct BVHNode {
     int triCount;
 };
 
-layout(std430, binding = 2) buffer VertexBuffer {
-    Vertex vertices[];
-};
-
-layout(std430, binding = 3) buffer BVHBuffer {
-    BVHNode bvhNodes[];
-};
+layout(std430, binding = 2) buffer VertexBuffer { Vertex vertices[]; };
+layout(std430, binding = 3) buffer BVHBuffer { BVHNode bvhNodes[]; };
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(rgba16f, binding = 0) uniform image2D imgOutput;
 layout(binding = 1) uniform sampler2D u_BaseColor;
 
-uniform Camera camera;
+uniform mat4 u_InvViewProj;
+uniform vec3 u_CamPos;
+uniform vec3 u_CamForward;
+uniform vec3 u_CamRight;
+uniform vec3 u_CamUp;
 uniform int u_SampleCount;
 uniform int u_VertexCount;
+uniform int u_MaxBounces;
+uniform float u_Aperture;
+uniform float u_FocalDist;
+uniform vec3 u_SunDirection;
+uniform vec3 u_SunColor;
+uniform float u_SunRadius;
+uniform int u_RTMode; // 0=纯光追, 1=混合
 
-// ==========================================
-// 随机数生成器 (PCG Hash) - 路径追踪的核心
-// ==========================================
 uint seed;
-uint pcg_hash(uint input0) {
-uint state = input0 * 747796405u + 2891336453u;
-uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
-return (word >> 22u) ^ word;
+uint pcg_hash(uint i) {
+    uint state = i * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
 }
+float rand() { seed = pcg_hash(seed); return float(seed) / 4294967296.0; }
 
-float rand() {
-    seed = pcg_hash(seed);
-    return float(seed) / 4294967296.0;
-}
-
-// ==========================================
-// 物理交叉测试函数
-// ==========================================
-bool rayTriangleIntersect(vec3 v0, vec3 v1, vec3 v2, vec3 ro, vec3 rd, out float t) {
-    vec3 e1 = v1 - v0;
-    vec3 e2 = v2 - v0;
-    vec3 p = cross(rd, e2);
-    float det = dot(e1, p);
-    if (abs(det) < 0.000001) return false;
-
-    float invDet = 1.0 / det;
-    vec3 s = ro - v0;
-
-    float u = dot(s, p) * invDet;
-    if (u < 0.0 || u > 1.0) return false;
-
-    vec3 q = cross(s, e1);
-    float v = dot(rd, q) * invDet;
+bool rayTriangleIntersect(vec3 v0, vec3 v1, vec3 v2, vec3 ro, vec3 rd, out float t, out vec2 bary) {
+    vec3 e1 = v1 - v0; vec3 e2 = v2 - v0;
+    vec3 p = cross(rd, e2); float det = dot(e1, p);
+    if (abs(det) < 1e-6) return false;
+    float invDet = 1.0 / det; vec3 s = ro - v0;
+    float u = dot(s, p) * invDet; if (u < 0.0 || u > 1.0) return false;
+    vec3 q = cross(s, e1); float v = dot(rd, q) * invDet;
     if (v < 0.0 || u + v > 1.0) return false;
-
-    t = dot(e2, q) * invDet;
-    return t > 0.0001; // 避免自相交的微小偏移
+    t = dot(e2, q) * invDet; bary = vec2(u, v);
+    return t > 0.0001;
 }
 
 float rayAABBIntersect(vec3 ro, vec3 invRd, vec3 aabbMin, vec3 aabbMax) {
-    vec3 t0 = (aabbMin - ro) * invRd;
-    vec3 t1 = (aabbMax - ro) * invRd;
-    vec3 tmin = min(t0, t1);
-    vec3 tmax = max(t0, t1);
-
+    vec3 t0 = (aabbMin - ro) * invRd; vec3 t1 = (aabbMax - ro) * invRd;
+    vec3 tmin = min(t0, t1); vec3 tmax = max(t0, t1);
     float tNear = max(max(tmin.x, tmin.y), tmin.z);
     float tFar  = min(min(tmax.x, tmax.y), tmax.z);
-
-    if (tNear > tFar || tFar < 0.0) return 1e30;
-    return tNear > 0.0 ? tNear : tFar;
+    return (tNear > tFar || tFar < 0.0) ? 1e30 : max(tNear, 0.0);
 }
 
-bool traceScene(vec3 ro, vec3 rd, out float tNear, out vec3 hitNormal) {
-    tNear = 1e20;
-    bool hit = false;
-    vec3 invRd = 1.0 / rd;
-
-    int stack[64];
-    int stackPtr = 0;
-    stack[stackPtr++] = 0;
-
+bool traceScene(vec3 ro, vec3 rd, out float tNear, out vec3 hitNormal, out vec2 hitUV) {
+    tNear = 1e20; bool hit = false; vec3 invRd = 1.0 / rd;
+    int stack[128]; int stackPtr = 0; stack[stackPtr++] = 0;
+    int bestVertBase = -1; vec2 bestBary = vec2(0.0);
     while (stackPtr > 0) {
-        int nodeIdx = stack[--stackPtr];
-        BVHNode node = bvhNodes[nodeIdx];
-
-        float distAABB = rayAABBIntersect(ro, invRd, node.aabbMin, node.aabbMax);
-        if (distAABB >= tNear) continue;
-
+        int nodeIdx = stack[--stackPtr]; BVHNode node = bvhNodes[nodeIdx];
+        if (rayAABBIntersect(ro, invRd, node.aabbMin, node.aabbMax) >= tNear) continue;
         if (node.triCount > 0) {
             for (int i = 0; i < node.triCount; i++) {
                 int vertBase = (node.leftFirst + i) * 3;
                 if (vertBase + 2 >= u_VertexCount) continue;
-
-                vec3 v0 = vertices[vertBase + 0].position.xyz;
-                vec3 v1 = vertices[vertBase + 1].position.xyz;
-                vec3 v2 = vertices[vertBase + 2].position.xyz;
-
-                float t;
-                if (rayTriangleIntersect(v0, v1, v2, ro, rd, t)) {
-                    if (t < tNear) {
-                        tNear = t;
-                        // 平面法线，如果有顶点法线可以考虑插值，这里使用面法线更利于表现低模质感
-                        hitNormal = normalize(cross(v1 - v0, v2 - v0));
-                        hit = true;
-                    }
+                float t; vec2 bary;
+                if (rayTriangleIntersect(vertices[vertBase].position.xyz, vertices[vertBase+1].position.xyz, vertices[vertBase+2].position.xyz, ro, rd, t, bary)) {
+                    if (t < tNear) { tNear = t; bestBary = bary; bestVertBase = vertBase; hit = true; }
                 }
             }
         } else {
-            int child1 = node.leftFirst;
-            int child2 = node.leftFirst + 1;
-
-            float dist1 = rayAABBIntersect(ro, invRd, bvhNodes[child1].aabbMin, bvhNodes[child1].aabbMax);
-            float dist2 = rayAABBIntersect(ro, invRd, bvhNodes[child2].aabbMin, bvhNodes[child2].aabbMax);
-
-            // 前序遍历优化：先测试距离近的包围盒
-            if (dist1 > dist2) {
-                if (dist1 < tNear && stackPtr < 64) stack[stackPtr++] = child1;
-                if (dist2 < tNear && stackPtr < 64) stack[stackPtr++] = child2;
+            int c1 = node.leftFirst, c2 = node.leftFirst + 1;
+            float d1 = rayAABBIntersect(ro, invRd, bvhNodes[c1].aabbMin, bvhNodes[c1].aabbMax);
+            float d2 = rayAABBIntersect(ro, invRd, bvhNodes[c2].aabbMin, bvhNodes[c2].aabbMax);
+            if (d1 > d2) {
+                if (d1 < tNear && stackPtr < 128) stack[stackPtr++] = c1;
+                if (d2 < tNear && stackPtr < 128) stack[stackPtr++] = c2;
             } else {
-                if (dist2 < tNear && stackPtr < 64) stack[stackPtr++] = child2;
-                if (dist1 < tNear && stackPtr < 64) stack[stackPtr++] = child1;
+                if (d2 < tNear && stackPtr < 128) stack[stackPtr++] = c2;
+                if (d1 < tNear && stackPtr < 128) stack[stackPtr++] = c1;
             }
         }
+    }
+    if (hit) {
+        float w = 1.0 - bestBary.x - bestBary.y;
+        hitNormal = normalize(vertices[bestVertBase].normal.xyz * w + vertices[bestVertBase+1].normal.xyz * bestBary.x + vertices[bestVertBase+2].normal.xyz * bestBary.y);
+        hitUV = vertices[bestVertBase].texCoord.xy * w + vertices[bestVertBase+1].texCoord.xy * bestBary.x + vertices[bestVertBase+2].texCoord.xy * bestBary.y;
     }
     return hit;
 }
 
-// 余弦权重半球采样 (用于物理真实的漫反射反弹)
-vec3 randomCosineHemisphereDirection(vec3 normal) {
-    float u1 = rand();
-    float u2 = rand();
-    float r = sqrt(u1);
-    float theta = 2.0 * 3.1415926535 * u2;
-
-    float x = r * cos(theta);
-    float y = r * sin(theta);
-    float z = sqrt(max(0.0, 1.0 - u1));
-
-    vec3 tangent = normalize(abs(normal.z) > 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0));
-    vec3 bitangent = cross(normal, tangent);
-    tangent = cross(bitangent, normal);
-
-    return tangent * x + bitangent * y + normal * z;
+vec3 evaluatePhysicalSky(vec3 rd) {
+    vec3 L = normalize(u_SunDirection);
+    float cosTheta = dot(rd, L);
+    vec3 skyHorizon = vec3(0.5, 0.6, 0.75); vec3 skyZenith = vec3(0.05, 0.15, 0.4);
+    vec3 skyColor = mix(skyHorizon, skyZenith, clamp(rd.y, 0.0, 1.0));
+    float sunDisk = smoothstep(0.9993, 0.9995, cosTheta);
+    return skyColor + u_SunColor * sunDisk;
 }
 
-// ==========================================
-// 主函数
-// ==========================================
 void main() {
     ivec2 pixelCoords = ivec2(gl_GlobalInvocationID.xy);
     ivec2 res = imageSize(imgOutput);
-
     if (pixelCoords.x >= res.x || pixelCoords.y >= res.y) return;
 
-    // 初始化随机种子，确保每个像素每帧都有独立的随机序列
+    // 【关键】提取原始贴图颜色
+    vec4 screenColor = texelFetch(u_BaseColor, pixelCoords, 0);
     seed = pcg_hash(uint(pixelCoords.x) * 1973u + uint(pixelCoords.y) * 9277u + uint(u_SampleCount) * 26699u);
 
-    vec4 base = texelFetch(u_BaseColor, pixelCoords, 0);
+    vec2 ndc = (vec2(pixelCoords) + 0.5) / vec2(res) * 2.0 - 1.0;
+    vec4 target = u_InvViewProj * vec4(ndc.x, ndc.y, -1.0, 1.0);
+    vec3 rayDir = normalize(target.xyz / target.w - u_CamPos);
+    vec3 rayOrigin = u_CamPos;
 
-    if (u_VertexCount < 3) {
-        imageStore(imgOutput, pixelCoords, base);
+    float tNear; vec3 normal; vec2 uv;
+    if (!traceScene(rayOrigin, rayDir, tNear, normal, uv)) {
+        // 如果没撞到地面，直接沿用光栅化的天空
+        imageStore(imgOutput, pixelCoords, screenColor);
         return;
     }
 
-    // 抗锯齿：在像素范围内加入亚像素随机抖动
-    vec2 jitter = vec2(rand(), rand()) - 0.5;
-    vec2 texCoords = (vec2(pixelCoords) + 0.5 + jitter) / vec2(res);
-    float aspectRatio = float(res.x) / float(res.y);
+    // 撞到了地面，计算光追阴影
+    vec3 hitPos = rayOrigin + rayDir * tNear;
+    vec3 L = normalize(u_SunDirection);
+    float shadow = 1.0;
+    float st; vec3 sn; vec2 su;
+    if (traceScene(hitPos + normal * 0.01, L, st, sn, su)) shadow = 0.2; // 简单的硬阴影
 
-    float fovRad = radians(camera.fov);
-    float scale = tan(fovRad * 0.5);
-
-    vec2 d = texCoords * 2.0 - 1.0;
-    d.x *= aspectRatio * scale;
-    d.y *= scale;
-
-    vec3 rayDir = normalize(d.x * camera.right + d.y * camera.up + camera.forward);
-    vec3 rayOrigin = camera.position;
-
-    // ==========================================
-    // 蒙特卡洛路径追踪 (Path Tracing Core)
-    // ==========================================
-    vec3 radiance = vec3(0.0);
-    vec3 throughput = vec3(1.0);
-    vec3 ro = rayOrigin;
-    vec3 rd = rayDir;
-
-    // 环境光与物理天光设置
-    vec3 sunDir = normalize(vec3(0.6, 0.8, -0.4));
-    vec3 sunColor = vec3(8.0, 7.5, 6.5);
-    vec3 skyZenith = vec3(0.1, 0.3, 0.6);
-    vec3 skyHorizon = vec3(0.8, 0.85, 0.9);
-
-    int MAX_BOUNCES = 3; // 3次反弹足够产生优秀的全局光照
-
-    for(int bounce = 0; bounce < MAX_BOUNCES; bounce++) {
-        float tNear;
-        vec3 hitNormal;
-
-        if (!traceScene(ro, rd, tNear, hitNormal)) {
-            if (bounce == 0) {
-                // 如果第一次就没击中，显示底图
-                radiance += throughput * base.rgb;
-            } else {
-                // 如果是反弹光线飞向天空，计算物理大气渐变
-                float skyT = clamp(0.5 * (rd.y + 1.0), 0.0, 1.0);
-                vec3 skyColor = mix(skyHorizon, skyZenith, skyT);
-                radiance += throughput * skyColor;
-            }
-            break;
-        }
-
-        vec3 hitPos = ro + rd * tNear;
-        vec3 normal = hitNormal;
-
-        // 如果是从背后击中，反转法线
-        if (dot(normal, rd) > 0.0) {
-            normal = -normal;
-        }
-
-        // 步进微小距离，避免自相交导致表面产生麻点 (Shadow Acne)
-        ro = hitPos + normal * 0.001;
-
-        // 设定白模材质反照率 (Albedo)
-        vec3 albedo = vec3(0.85); // 柔和的偏白黏土质感
-
-        // 直接光照 (Next Event Estimation) - 生成软阴影
-        // 给太阳方向添加随机偏移，偏移越大阴影越柔和
-        vec3 jitteredSunDir = normalize(sunDir + vec3(rand()-0.5, rand()-0.5, rand()-0.5) * 0.05);
-        float shadowT;
-        vec3 shadowNorm;
-        if (!traceScene(ro, jitteredSunDir, shadowT, shadowNorm)) {
-            // 如果能看到太阳，计算漫反射
-            float ndotl = max(dot(normal, jitteredSunDir), 0.0);
-            radiance += throughput * albedo * sunColor * ndotl * (1.0 / 3.14159265);
-        }
-
-        // 间接光照 - 随机反弹 (Russian Roulette 或者固定次数)
-        rd = randomCosineHemisphereDirection(normal);
-
-        // 渲染方程中，Cosine项与PDF相除抵消，只剩下材质颜色
-        throughput *= albedo;
-    }
-
-    vec3 finalColor = radiance;
-
-    // 图像累积逻辑 (与 Java 端的 u_SampleCount 配合)
-    if (u_SampleCount <= 1) {
-        imageStore(imgOutput, pixelCoords, vec4(finalColor, 1.0));
+    // 【混合逻辑】：光栅化贴图颜色 * 光追阴影
+    vec3 finalColor;
+    if (u_RTMode == 1) {
+        finalColor = screenColor.rgb * shadow;
     } else {
-        vec4 oldColor = imageLoad(imgOutput, pixelCoords);
-        vec4 accumulatedColor = mix(oldColor, vec4(finalColor, 1.0), 1.0 / float(u_SampleCount));
-        imageStore(imgOutput, pixelCoords, accumulatedColor);
+        // 纯光追模式：显示棋盘格
+        float grid = mod(floor(uv.x * 20.0) + floor(uv.y * 20.0), 2.0);
+        finalColor = mix(vec3(0.1), vec3(0.8), grid) * shadow;
     }
+
+    imageStore(imgOutput, pixelCoords, vec4(finalColor, 1.0));
 }
