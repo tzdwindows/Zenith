@@ -136,9 +136,6 @@ public class Test7 {
             waterShader.setUniform("u_DeepColor", new Vector3f(0.01f, 0.15f, 0.35f));
             waterShader.setUniform("u_ShallowColor", new Vector3f(0.1f, 0.5f, 0.7f));
 
-            // 重要：关闭雨水效果
-            waterShader.setRainIntensity(0.0f);
-
             waterMesh.render();
 
             // --- 3. (雨水渲染已移除) ---

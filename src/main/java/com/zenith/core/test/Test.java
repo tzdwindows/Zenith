@@ -65,9 +65,9 @@ public class Test extends ZenithEngine {
         terrainParams.hasRockMap = true;
         terrainParams.hasNormalMap = true;
         terrainParams.uvScale = 120.0f;
-        terrainParams.amplitude = 140.0f;
-        terrainParams.frequency = 0.0016f;
-        terrainParams.snowHeight = 90.0f;
+        terrainParams.amplitude = 0.0f;  // 增加振幅，让山峰更高
+        terrainParams.frequency = 0.002f;  // 调整频率，让起伏更自然
+        terrainParams.snowHeight = 150.0f; // 雪线高度
 
         terrainMesh = new GLMesh(terrainRawData.length / 20, layout);
         terrainMesh.updateVertices(terrainRawData);
@@ -222,7 +222,7 @@ public class Test extends ZenithEngine {
             return;
         }
         if (waterEntity == null || sceneFBO == null || waterNormal == null) return;
-
+        glDisable(GL_CULL_FACE);
         waterShader.bind();
 
         Matrix4f vpMatrix = new Matrix4f(projMatrix).mul(viewMatrix);
@@ -261,6 +261,7 @@ public class Test extends ZenithEngine {
         glDepthMask(false);
         waterEntity.getMesh().render();
         glDepthMask(true);
+        glEnable(GL_CULL_FACE);
     }
 
     private VertexLayout createStandardLayout() {

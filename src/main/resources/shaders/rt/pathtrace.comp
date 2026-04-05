@@ -80,7 +80,7 @@ float rayAABBIntersect(vec3 ro, vec3 invRd, vec3 aabbMin, vec3 aabbMax) {
 }
 
 bool traceScene(vec3 ro, vec3 rd, out float tNear, out vec3 hitNormal, out vec2 hitUV) {
-    tNear = 1e20; bool hit = false; vec3 invRd = 1.0 / rd;
+    tNear = 1e20; bool hit = false; vec3 invRd = 1.0 / (rd + vec3(1e-8));
     int stack[128]; int stackPtr = 0; stack[stackPtr++] = 0;
     int bestVertBase = -1; vec2 bestBary = vec2(0.0);
     while (stackPtr > 0) {
@@ -187,7 +187,7 @@ void main() {
         if (traceScene(rayOrigin, rayDir, tNear, normal, uv)) {
             vec3 hitPos = rayOrigin + rayDir * tNear;
             if (dot(normal, rayDir) > 0.0) normal = -normal;
-            rayOrigin = hitPos + normal * 0.001;
+            rayOrigin = hitPos + normal * max(0.001, tNear * 0.00005);
 
             // 采样物理太阳软阴影
             vec2 sunJitter = randomDisk() * u_SunRadius;
@@ -270,6 +270,10 @@ void main() {
         } else {
             rayDir = cosineSampleHemisphere(normal);
             throughput *= albedo * (1.0 - metallic) / (1.0 - probSpecular);
+        }
+
+        if (dot(rayDir, normal) <= 0.0) {
+            break;
         }
 
         if (bounce >= 2) {

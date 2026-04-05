@@ -20,6 +20,7 @@ uniform vec4 u_ActiveSplashes[MAX_SPLASHES];
 uniform sampler2D u_SceneColor;
 uniform sampler2D u_SceneDepth;
 uniform mat4 u_InvViewProjection;
+uniform mat4 u_ViewProjection; // 修复：SSR 投影需要使用
 
 struct WaterMaterial {
     vec3 deepColor;
@@ -29,7 +30,7 @@ struct WaterMaterial {
     float rainIntensity;
     vec3 foamColor;
     float ambientWeight;
-    float dayFactor; // ⭐ 新增：用于判断日夜，压暗水面
+    float dayFactor;
 };
 
 struct WaveResult {
@@ -68,20 +69,48 @@ vec3 reconstructWorld(vec2 uv, float depth) {
     return world.xyz / world.w;
 }
 
-// ⭐ 修复天空倒影：白天亮蓝，晚上极暗的午夜蓝
 vec3 sampleSky(vec3 d, float dayFactor) {
     float t = clamp(d.y * 0.5 + 0.5, 0.0, 1.0);
     vec3 skyDay = mix(vec3(0.04, 0.08, 0.16), vec3(0.45, 0.65, 0.92), t);
-    vec3 skyNight = mix(vec3(0.005, 0.01, 0.02), vec3(0.01, 0.02, 0.05), t); // 黑夜颜色
-
-    // 根据日夜因子混合天空颜色
+    vec3 skyNight = mix(vec3(0.005, 0.01, 0.02), vec3(0.01, 0.02, 0.05), t);
     vec3 skyBase = mix(skyNight, skyDay, dayFactor);
-
-    // 只有白天才会反射耀眼的太阳高光
     float sunBoost = pow(max(dot(normalize(d), vec3(0.0, 1.0, 0.0)), 0.0), 6.0);
     skyBase += vec3(1.0, 0.85, 0.65) * sunBoost * 0.35 * dayFactor;
-
     return skyBase;
+}
+
+// 修复：添加屏幕空间反射 (SSR) 解决倒影不真实的问题
+vec3 computeSSR(vec3 worldPos, vec3 R, vec3 fallbackSky) {
+    vec3 stepDir = R * 2.0;
+    vec3 currentPos = worldPos + stepDir * 0.5;
+    vec3 hitColor = fallbackSky;
+
+    for (int i = 0; i < 24; i++) {
+        currentPos += stepDir;
+        vec4 clipPos = u_ViewProjection * vec4(currentPos, 1.0);
+        if (clipPos.w <= 0.0) break;
+
+        vec3 ndcPos = clipPos.xyz / clipPos.w;
+        vec2 screenUV = ndcPos.xy * 0.5 + 0.5;
+
+        if (screenUV.x < 0.0 || screenUV.x > 1.0 || screenUV.y < 0.0 || screenUV.y > 1.0) {
+            break;
+        }
+
+        float sceneDepthZ = texture(u_SceneDepth, screenUV).r;
+        float ndcSceneZ = sceneDepthZ * 2.0 - 1.0;
+        float zDiff = ndcPos.z - ndcSceneZ;
+
+        // 深度命中判定：允许 0.05 的 NDC 厚度容差
+        if (zDiff > 0.0001 && zDiff < 0.05) {
+            hitColor = texture(u_SceneColor, screenUV).rgb;
+            vec2 fade = smoothstep(0.0, 0.05, screenUV) * smoothstep(1.0, 0.95, screenUV);
+            hitColor = mix(fallbackSky, hitColor, fade.x * fade.y);
+            break;
+        }
+        stepDir *= 1.15; // 对数递增步长，平衡性能与反射距离
+    }
+    return hitColor;
 }
 
 vec3 shadeWaterPBR(
@@ -89,34 +118,46 @@ vec3 worldPos, vec3 V, vec3 L, vec3 N,
 vec3 lightIntensity, WaterMaterial mat, float time, vec2 fragUV
 ) {
     float NoV = clamp(dot(N, V), 0.001, 1.0);
-
     float depthMapZ = texture(u_SceneDepth, fragUV).r;
-    float waterDepth = 20.0;
     vec3 refraction = mat.deepColor;
+    float rayLength = 20.0;
 
     if (depthMapZ > 0.0001 && depthMapZ < 0.9999) {
         vec3 scenePos = reconstructWorld(fragUV, depthMapZ);
-        waterDepth = max(worldPos.y - scenePos.y, 0.0);
-        if (isnan(waterDepth) || isinf(waterDepth)) waterDepth = 20.0;
 
-        vec3 extinction = vec3(0.45, 0.15, 0.05);
-        vec3 transmittance = exp(-waterDepth * extinction * mat.clarity);
+        // 修复：真实的物理射线距离，而非简单的 Y 轴相减
+        rayLength = distance(worldPos, scenePos);
 
-        vec2 offset = N.xz * 0.02 * clamp(waterDepth * 0.05, 0.0, 1.0);
+        // 修复：Beer-Lambert 定律吸收模型
+        // 水体对红光吸收最强，蓝光最弱，基于此计算消光系数
+        vec3 absorption = vec3(0.85, 0.25, 0.05);
+        vec3 transmittance = exp(-rayLength * absorption * mat.clarity * 0.1);
+
+        // 焦散与折射扭曲随着深度加深逐渐平滑
+        float distortionFactor = clamp(rayLength * 0.05, 0.0, 1.0);
+        vec2 offset = N.xz * 0.03 * distortionFactor;
         vec3 refractScene = texture(u_SceneColor, clamp(fragUV + offset, 0.001, 0.999)).rgb;
-        refraction = mix(mat.deepColor, refractScene, transmittance);
+
+        // 修复：深水区颜色沉淀，防止直接透视水底
+        vec3 waterVolColor = mix(mat.shallowColor, mat.deepColor, clamp(rayLength * 0.08, 0.0, 1.0));
+        refraction = mix(waterVolColor, refractScene, transmittance);
     }
 
-    if (isnan(refraction.x)) refraction = mat.deepColor;
-
     vec3 R = reflect(-V, N);
-    vec3 skyReflection = sampleSky(R, mat.dayFactor); // 传入日夜因子
+    vec3 skyReflection = sampleSky(R, mat.dayFactor);
 
+    // 触发 SSR 反射计算
+    vec3 reflection = computeSSR(worldPos, R, skyReflection);
+
+    // 修复：强化菲涅尔效应，使掠射角的水面呈现高度镜面感
     float f0 = 0.02;
     float fresnel = f0 + (1.0 - f0) * pow(1.0 - NoV, 5.0);
-    vec3 envColor = mix(refraction, skyReflection, fresnel);
+    fresnel = clamp(fresnel * 1.5, 0.0, 1.0);
 
-    float foamEdge = smoothstep(0.0, 1.5, 1.5 - waterDepth) * smoothstep(0.6, 1.0, N.y);
+    vec3 envColor = mix(refraction, reflection, fresnel);
+
+    // 泡沫逻辑适配新的射线距离
+    float foamEdge = smoothstep(0.0, 2.5, 2.5 - rayLength) * smoothstep(0.7, 1.0, N.y);
     vec3 foam = mat.foamColor * foamEdge * 0.35;
 
     PBRParams pixel;

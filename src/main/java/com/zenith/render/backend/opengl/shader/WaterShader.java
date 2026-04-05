@@ -6,7 +6,6 @@ import org.joml.*;
 import com.zenith.render.backend.opengl.LightManager;
 
 public class WaterShader extends GLShader {
-
     private static final String VERTEX_SRC =
             "#version 330 core\n" +
                     "\n" +
@@ -16,7 +15,7 @@ public class WaterShader extends GLShader {
                     "layout (location = 1) in vec3 aNormal;\n" +
                     "layout (location = 2) in vec2 aTexCoord;\n" +
                     "\n" +
-                    "uniform mat4 u_ViewProjection;\n" +
+                    "// u_ViewProjection 已在 water.glsl 声明，此处移除以防止重定义冲突\n" +
                     "uniform mat4 u_Model;\n" +
                     "uniform float u_Time;\n" +
                     "\n" +
@@ -80,15 +79,12 @@ public class WaterShader extends GLShader {
                     "    vec3 N = normalize(vTBN * tangentNormal);\n" +
                     "    int lightCount = max(1, min(int(u_LightCount), 16));\n" +
                     "\n" +
-                    "    // ⭐ 核心修复：抓取全局主光源(太阳)的强度，判断当前是白天还是黑夜\n" +
-                    "    float dayFactor = 0.02; // 默认夜晚微弱月光\n" +
+                    "    float dayFactor = 0.02;\n" +
                     "    if (u_LightCount > 0) {\n" +
-                    "        // 将太阳强度映射为 0.02 (黑夜) 到 1.0 (正午)\n" +
                     "        dayFactor = clamp(u_Lights[0].intensity * 0.5, 0.02, 1.0);\n" +
                     "    }\n" +
                     "\n" +
                     "    WaterMaterial mat;\n" +
-                    "    // 关键！所有基础发色属性，必须乘以 dayFactor，否则晚上会发光\n" +
                     "    mat.deepColor = u_DeepColor * dayFactor;\n" +
                     "    mat.shallowColor = u_ShallowColor * dayFactor;\n" +
                     "    mat.foamColor = vec3(0.85) * dayFactor;\n" +
