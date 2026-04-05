@@ -30,14 +30,19 @@ uniform vec3 u_CamRight;
 uniform vec3 u_CamUp;
 uniform int u_SampleCount;
 uniform int u_VertexCount;
+
+// 电影级调节参数
 uniform int u_MaxBounces;
-uniform float u_Aperture;
-uniform float u_FocalDist;
+uniform float u_Aperture;      // 光圈 (控制景深)
+uniform float u_FocalDist;     // 对焦距离
 uniform vec3 u_SunDirection;
 uniform vec3 u_SunColor;
-uniform float u_SunRadius;
-uniform int u_RTMode; // 0=纯光追, 1=混合
+uniform float u_SunRadius;     // 太阳半径 (控制软阴影)
+uniform int u_RTMode;          // 0=纯光追展示, 1=混合贴图
 
+// ==========================================
+// 核心数学与随机数
+// ==========================================
 uint seed;
 uint pcg_hash(uint i) {
     uint state = i * 747796405u + 2891336453u;
@@ -46,6 +51,14 @@ uint pcg_hash(uint i) {
 }
 float rand() { seed = pcg_hash(seed); return float(seed) / 4294967296.0; }
 
+vec2 randomDisk() {
+    float r = sqrt(rand()); float theta = 2.0 * PI * rand();
+    return vec2(r * cos(theta), r * sin(theta));
+}
+
+// ==========================================
+// 几何相交算法
+// ==========================================
 bool rayTriangleIntersect(vec3 v0, vec3 v1, vec3 v2, vec3 ro, vec3 rd, out float t, out vec2 bary) {
     vec3 e1 = v1 - v0; vec3 e2 = v2 - v0;
     vec3 p = cross(rd, e2); float det = dot(e1, p);
@@ -103,52 +116,180 @@ bool traceScene(vec3 ro, vec3 rd, out float tNear, out vec3 hitNormal, out vec2 
     return hit;
 }
 
+// ==========================================
+// PBR 与 物理系统
+// ==========================================
 vec3 evaluatePhysicalSky(vec3 rd) {
     vec3 L = normalize(u_SunDirection);
     float cosTheta = dot(rd, L);
     vec3 skyHorizon = vec3(0.5, 0.6, 0.75); vec3 skyZenith = vec3(0.05, 0.15, 0.4);
     vec3 skyColor = mix(skyHorizon, skyZenith, clamp(rd.y, 0.0, 1.0));
-    float sunDisk = smoothstep(0.9993, 0.9995, cosTheta);
-    return skyColor + u_SunColor * sunDisk;
+    float sunDisk = smoothstep(0.9990, 0.9999, cosTheta);
+    float sunGlow = pow(max(cosTheta, 0.0), 100.0) * 0.1;
+    return skyColor + u_SunColor * (sunDisk + sunGlow);
 }
 
+vec3 fresnelSchlick(float cosTheta, vec3 F0) { return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0); }
+
+vec3 importanceSampleGGX(vec2 Xi, vec3 N, float roughness) {
+    float a = roughness * roughness; float phi = 2.0 * PI * Xi.x;
+    float cosTheta = sqrt((1.0 - Xi.y) / (1.0 + (a*a - 1.0) * Xi.y)); float sinTheta = sqrt(1.0 - cosTheta*cosTheta);
+    vec3 H = vec3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
+    vec3 up = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tangent = normalize(cross(up, N)); vec3 bitangent = cross(N, tangent);
+    return normalize(tangent * H.x + bitangent * H.y + N * H.z);
+}
+
+vec3 cosineSampleHemisphere(vec3 N) {
+    vec2 Xi = vec2(rand(), rand());
+    float r = sqrt(Xi.x); float theta = 2.0 * PI * Xi.y;
+    vec3 H = vec3(r * cos(theta), r * sin(theta), sqrt(max(0.0, 1.0 - Xi.x)));
+    vec3 up = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tangent = normalize(cross(up, N)); vec3 bitangent = cross(N, tangent);
+    return normalize(tangent * H.x + bitangent * H.y + N * H.z);
+}
+
+// ==========================================
+// 主着色器程序
+// ==========================================
 void main() {
     ivec2 pixelCoords = ivec2(gl_GlobalInvocationID.xy);
     ivec2 res = imageSize(imgOutput);
     if (pixelCoords.x >= res.x || pixelCoords.y >= res.y) return;
 
-    // 【关键】提取原始贴图颜色
+    // 提取光栅化生成的带有贴图的原始画面
     vec4 screenColor = texelFetch(u_BaseColor, pixelCoords, 0);
     seed = pcg_hash(uint(pixelCoords.x) * 1973u + uint(pixelCoords.y) * 9277u + uint(u_SampleCount) * 26699u);
 
-    vec2 ndc = (vec2(pixelCoords) + 0.5) / vec2(res) * 2.0 - 1.0;
+    // 生成抗锯齿与景深相机射线
+    vec2 jitter = vec2(rand(), rand()) - 0.5;
+    vec2 ndc = (vec2(pixelCoords) + 0.5 + jitter) / vec2(res) * 2.0 - 1.0;
     vec4 target = u_InvViewProj * vec4(ndc.x, ndc.y, -1.0, 1.0);
     vec3 rayDir = normalize(target.xyz / target.w - u_CamPos);
     vec3 rayOrigin = u_CamPos;
 
-    float tNear; vec3 normal; vec2 uv;
-    if (!traceScene(rayOrigin, rayDir, tNear, normal, uv)) {
-        // 如果没撞到地面，直接沿用光栅化的天空
-        imageStore(imgOutput, pixelCoords, screenColor);
-        return;
+    if (u_Aperture > 0.0) {
+        vec3 focalPoint = u_CamPos + rayDir * u_FocalDist;
+        vec2 lensJitter = randomDisk() * u_Aperture;
+        rayOrigin += u_CamRight * lensJitter.x + u_CamUp * lensJitter.y;
+        rayDir = normalize(focalPoint - rayOrigin);
     }
 
-    // 撞到了地面，计算光追阴影
-    vec3 hitPos = rayOrigin + rayDir * tNear;
-    vec3 L = normalize(u_SunDirection);
-    float shadow = 1.0;
-    float st; vec3 sn; vec2 su;
-    if (traceScene(hitPos + normal * 0.01, L, st, sn, su)) shadow = 0.2; // 简单的硬阴影
+    vec3 finalColor = vec3(0.0);
 
-    // 【混合逻辑】：光栅化贴图颜色 * 光追阴影
-    vec3 finalColor;
+    // ==============================================================
+    // 模式 A：混合模式 (完美保留草地贴图，仅叠加光追软阴影与景深)
+    // ==============================================================
     if (u_RTMode == 1) {
-        finalColor = screenColor.rgb * shadow;
-    } else {
-        // 纯光追模式：显示棋盘格
-        float grid = mod(floor(uv.x * 20.0) + floor(uv.y * 20.0), 2.0);
-        finalColor = mix(vec3(0.1), vec3(0.8), grid) * shadow;
+        float tNear; vec3 normal; vec2 uv;
+
+        // 射线撞击检测
+        if (traceScene(rayOrigin, rayDir, tNear, normal, uv)) {
+            vec3 hitPos = rayOrigin + rayDir * tNear;
+            if (dot(normal, rayDir) > 0.0) normal = -normal;
+            rayOrigin = hitPos + normal * 0.001;
+
+            // 采样物理太阳软阴影
+            vec2 sunJitter = randomDisk() * u_SunRadius;
+            vec3 lightDir = normalize(u_SunDirection + u_CamRight * sunJitter.x + u_CamUp * sunJitter.y);
+
+            float shadowMask = 1.0; // 默认无阴影
+            float shadowT; vec3 sNorm; vec2 sUV;
+            if (traceScene(rayOrigin, lightDir, shadowT, sNorm, sUV)) {
+                shadowMask = 0.25; // 处于阴影中，压暗原有的贴图 (环境光遮蔽级别)
+            }
+
+            // 完美结合：原始贴图颜色 * 阴影掩码 (绝对不双重曝光！)
+            finalColor = screenColor.rgb * shadowMask;
+        } else {
+            // 没撞到地形，返回光栅化画好的天空
+            finalColor = screenColor.rgb;
+        }
+
+        // TAA 图像时域累积
+        if (u_SampleCount <= 1) {
+            imageStore(imgOutput, pixelCoords, vec4(finalColor, 1.0));
+        } else {
+            vec4 oldColor = imageLoad(imgOutput, pixelCoords);
+            vec4 accColor = mix(oldColor, vec4(finalColor, 1.0), 1.0 / float(u_SampleCount));
+            imageStore(imgOutput, pixelCoords, accColor);
+        }
+        return; // 混合模式直接结束
     }
 
-    imageStore(imgOutput, pixelCoords, vec4(finalColor, 1.0));
+    // ==============================================================
+    // 模式 B：纯光追模式 (电影级路径追踪、GGX、多重GI反弹)
+    // ==============================================================
+    vec3 radiance = vec3(0.0);
+    vec3 throughput = vec3(1.0);
+    int maxBounces = max(2, u_MaxBounces);
+
+    for(int bounce = 0; bounce < maxBounces; bounce++) {
+        float tNear; vec3 normal; vec2 uv;
+
+        if (!traceScene(rayOrigin, rayDir, tNear, normal, uv)) {
+            radiance += throughput * evaluatePhysicalSky(rayDir);
+            break;
+        }
+
+        vec3 hitPos = rayOrigin + rayDir * tNear;
+        if (dot(normal, rayDir) > 0.0) normal = -normal;
+        rayOrigin = hitPos + normal * 0.001;
+
+        // 生成程序化金属 PBR 地砖
+        float grid = mod(floor(uv.x * 15.0) + floor(uv.y * 15.0), 2.0);
+        vec3 albedo = mix(vec3(0.05), vec3(0.9), grid);
+        float roughness = mix(0.05, 0.8, grid);
+        float metallic = mix(1.0, 0.0, grid);
+        vec3 F0 = mix(vec3(0.04), albedo, metallic);
+        vec3 V = normalize(-rayDir);
+
+        // 直接光照 (NEE)
+        vec2 sunJitter = randomDisk() * u_SunRadius;
+        vec3 lightDir = normalize(u_SunDirection + u_CamRight * sunJitter.x + u_CamUp * sunJitter.y);
+        float shadowT; vec3 sNorm; vec2 sUV;
+        if (!traceScene(rayOrigin, lightDir, shadowT, sNorm, sUV)) {
+            vec3 H = normalize(V + lightDir);
+            float NdotL = max(dot(normal, lightDir), 0.0);
+            if (NdotL > 0.0) {
+                vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+                vec3 kD = (1.0 - F) * (1.0 - metallic);
+                vec3 diffuseLight = (albedo / PI) * kD;
+                radiance += throughput * diffuseLight * u_SunColor * NdotL;
+            }
+        }
+
+        // 间接反弹与轮盘赌
+        vec3 F_bounce = fresnelSchlick(max(dot(normal, V), 0.0), F0);
+        float probSpecular = clamp(max(F_bounce.x, max(F_bounce.y, F_bounce.z)), 0.1, 0.9);
+
+        if (rand() < probSpecular) {
+            vec3 H = importanceSampleGGX(vec2(rand(), rand()), normal, roughness);
+            rayDir = reflect(-V, H);
+            throughput *= F_bounce / probSpecular;
+        } else {
+            rayDir = cosineSampleHemisphere(normal);
+            throughput *= albedo * (1.0 - metallic) / (1.0 - probSpecular);
+        }
+
+        if (bounce >= 2) {
+            float p = max(throughput.x, max(throughput.y, throughput.z));
+            if (rand() > p) break;
+            throughput /= p;
+        }
+    }
+
+    // 纯光追模式下的 ACES 电影滤镜
+    finalColor = radiance * 1.2;
+    finalColor = (finalColor * (2.51 * finalColor + 0.03)) / (finalColor * (2.43 * finalColor + 0.59) + 0.14);
+    finalColor = pow(finalColor, vec3(1.0 / 2.2));
+
+    // TAA 图像时域累积
+    if (u_SampleCount <= 1) {
+        imageStore(imgOutput, pixelCoords, vec4(finalColor, 1.0));
+    } else {
+        vec4 oldColor = imageLoad(imgOutput, pixelCoords);
+        vec4 accColor = mix(oldColor, vec4(finalColor, 1.0), 1.0 / float(u_SampleCount));
+        imageStore(imgOutput, pixelCoords, accColor);
+    }
 }

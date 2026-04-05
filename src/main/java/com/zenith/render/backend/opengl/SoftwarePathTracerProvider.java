@@ -117,15 +117,15 @@ public class SoftwarePathTracerProvider implements RayTracingProvider {
 
         // 【新增参数：画质与景深控制】
         computeShader.setUniform("u_MaxBounces", 3);       // 反弹3次，兼顾性能与全局光照
-        computeShader.setUniform("u_Aperture", 0.0f);      // 0.0为关闭景深。想要电影感可设为 0.02f
-        computeShader.setUniform("u_FocalDist", 50.0f);    // 对焦距离
+        computeShader.setUniform("u_Aperture", 0.02f);      // 0.0为关闭景深。想要电影感可设为 0.02f
+        computeShader.setUniform("u_FocalDist", 60.0f);    // 对焦距离
 
         // 【新增参数：物理天空与阳光】
         // 找你的引擎中太阳的方向 (这里给个默认好莱坞顺光角度)
         org.joml.Vector3f sunDir = new org.joml.Vector3f(0.5f, 0.6f, -0.5f).normalize();
         computeShader.setUniform("u_SunDirection", sunDir);
         computeShader.setUniform("u_SunColor", new org.joml.Vector3f(15.0f, 13.0f, 10.0f)); // 耀眼暖光
-        computeShader.setUniform("u_SunRadius", 0.02f);    // 数值越大，地面阴影越柔和(软阴影)
+        computeShader.setUniform("u_SunRadius", 0.03f);    // 数值越大，地面阴影越柔和(软阴影)
         computeShader.setUniform("u_RTMode", com.zenith.common.config.RayTracingConfig.RT_MODE);
 
         computeShader.setUniform("u_VertexCount", vertexCount);
