@@ -1,35 +1,126 @@
 #version 430 core
+#define PI 3.14159265359
 
-// 1. 定义工作组大小（Compute Shader 必须）
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-// 2. 包含头文件 (会被 Preprocessor 展开)
-#include "pathTracer/common/globals.glsl"
-#include "pathTracer/common/uniforms.glsl"
-#include "pathTracer/common/intersection.glsl"
-#include "pathTracer/common/sampling.glsl"
-#include "pathTracer/common/disney.glsl"
-#include "pathTracer/common/pathtrace.glsl"
-
-// 3. 计算着色器使用 image2D 写入结果，不要用 out vec4
 layout(rgba16f, binding = 0) uniform image2D imgOutput;
+layout(binding = 1) uniform sampler2D u_BaseColor;
+layout(binding = 2) uniform sampler2D u_DepthMap;
 
+uniform mat4 u_ViewProj;
+uniform mat4 u_InvViewProj;
+uniform vec3 u_CamPos;
+uniform vec3 u_SunDirection;
+uniform int u_SampleCount;
+
+// PCG 随机抖动
+uint seed;
+uint pcg_hash(uint i) {
+    uint state = i * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+float rand() { seed = pcg_hash(seed); return float(seed) / 4294967296.0; }
+
+// ==========================================
+// 稳健的坐标重建
+// ==========================================
+vec3 reconstructWorldPos(vec2 uv, float depth) {
+    vec4 ndc = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+    vec4 world = u_InvViewProj * ndc;
+    return world.xyz / world.w;
+}
+
+// ==========================================
+// 纯屏幕空间阴影步进 (Screen Space Contact Shadows)
+// 彻底抛弃法线求导，直接比较 Z-Buffer！极其稳健。
+// ==========================================
+bool traceScreenSpaceShadow(vec3 worldPos, vec3 lightDir, float jitter) {
+    // 偏移起点，绝对杜绝“自己遮挡自己”产生的黑斑痤疮
+    vec3 p = worldPos + lightDir * (0.2 + jitter * 0.1);
+    float stepLen = 1.0;
+
+    for(int i = 0; i < 40; i++) {
+        p += lightDir * stepLen;
+
+        vec4 clip = u_ViewProj * vec4(p, 1.0);
+        if (clip.w <= 0.0) continue;
+
+        vec3 ndc = clip.xyz / clip.w;
+        vec2 hitUV = ndc.xy * 0.5 + 0.5;
+
+        // 射线飞出屏幕，说明阳光没被挡住
+        if (hitUV.x < 0.0 || hitUV.x > 1.0 || hitUV.y < 0.0 || hitUV.y > 1.0) return false;
+
+        float bufferZ = texture(u_DepthMap, hitUV).r; // 屏幕里的实际深度
+        float rayZ = ndc.z * 0.5 + 0.5;               // 光线的虚拟深度
+
+        // 【致命修复】：如果 bufferZ < rayZ，说明屏幕上有物体挡在光线前面了！
+        // 增加 0.0001 容差抵抗 Z-fighting，增加 0.05 深度厚度防止穿模。
+        if (bufferZ < rayZ - 0.0001 && (rayZ - bufferZ) < 0.05) {
+            return true; // 确认被遮挡！
+        }
+
+        // 动态步长：距离越远，步子迈越大，加速性能
+        stepLen *= 1.2;
+    }
+    return false;
+}
+
+// ==========================================
+// 主着色器程序
+// ==========================================
 void main() {
-    // 获取当前像素坐标
     ivec2 pixelCoords = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 size = imageSize(imgOutput);
+    ivec2 res = imageSize(imgOutput);
+    if (pixelCoords.x >= res.x || pixelCoords.y >= res.y) return;
 
-    // 边界检查
-    if (pixelCoords.x >= size.x || pixelCoords.y >= size.y) return;
+    vec2 uv = (vec2(pixelCoords) + 0.5) / vec2(res);
+    float depth = texture(u_DepthMap, uv).r;
+    vec4 baseColor = texture(u_BaseColor, uv); // 完美的光栅化贴图画面
 
-    // --- 这里是你原本在 Fragment Shader 逻辑的平替 ---
+    seed = pcg_hash(uint(pixelCoords.x) * 1973u + uint(pixelCoords.y) * 9277u + uint(u_SampleCount) * 26699u);
 
-    // 生成射线 (假设函数在 sampling.glsl 或 uniforms.glsl 中)
-    Ray ray = generateRay(pixelCoords, size);
+    // 如果是天空 (深度极限值)，直接输出原图，什么都不用算
+    if (depth >= 1.0) {
+        imageStore(imgOutput, pixelCoords, baseColor);
+        return;
+    }
 
-    // 执行路径追踪 (在 pathtrace.glsl 中)
-    vec3 color = pathTrace(ray);
+    vec3 worldPos = reconstructWorldPos(uv, depth);
 
-    // 4. 存储结果，替代原来的 outCol = ...
-    imageStore(imgOutput, pixelCoords, vec4(color, 1.0));
+    // ==========================================
+    // 阴影遮蔽计算 (Soft Shadow Mask)
+    // ==========================================
+    float shadowMask = 1.0;
+
+    // 给太阳方向加上微量随机抖动，实现软阴影 (Soft Shadow)
+    vec2 sunJitter = vec2(rand(), rand()) * 2.0 - 1.0;
+    vec3 lightDir = normalize(u_SunDirection + vec3(sunJitter.x, 0, sunJitter.y) * 0.05);
+
+    // 发射探针射线检查阳光
+    if (traceScreenSpaceShadow(worldPos, lightDir, rand())) {
+        shadowMask = 0.3; // 被遮挡处留下 30% 的环境光亮度
+    }
+
+    // ==========================================
+    // 画面合成
+    // ==========================================
+    // 【完美融合】：直接使用原画面色彩 乘以 算出来的阴影遮罩！不再有双重曝光和横条纹！
+    vec3 finalColor = baseColor.rgb * shadowMask;
+
+    // ACES 色调映射 (提升电影感)
+    finalColor = (finalColor * (2.51 * finalColor + 0.03)) / (finalColor * (2.43 * finalColor + 0.59) + 0.14);
+
+    // ==========================================
+    // 时域去噪累积 (TAA)
+    // ==========================================
+    if (u_SampleCount <= 1) {
+        imageStore(imgOutput, pixelCoords, vec4(finalColor, 1.0));
+    } else {
+        vec4 oldColor = imageLoad(imgOutput, pixelCoords);
+        // 随时间混合，软阴影噪点会瞬间变得像丝绸一样光滑
+        vec4 accColor = mix(oldColor, vec4(finalColor, 1.0), 1.0 / float(u_SampleCount));
+        imageStore(imgOutput, pixelCoords, accColor);
+    }
 }

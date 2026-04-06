@@ -48,6 +48,7 @@ dependencies {
     implementation "org.lwjgl:lwjgl-stb"
     implementation "org.lwjgl:lwjgl-assimp"
     implementation "org.lwjgl:lwjgl-shaderc"
+    implementation "org.lwjgl:lwjgl-cuda"
 
     runtimeOnly "org.lwjgl:lwjgl-shaderc::${project.lwjglNatives}"
     runtimeOnly "org.lwjgl:lwjgl::${project.lwjglNatives}"
