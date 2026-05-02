@@ -1,10 +1,14 @@
 plugins {
     id 'java'
+    id 'com.github.jk1.dependency-license-report' version '3.1.2'
 }
+
+apply plugin: 'com.zenith.modifier'
 
 group = 'com.zenith.engine'
 version = '1.0-SNAPSHOT'
 
+// --- 变量定义保持不变 ---
 def lwjglVersion = "3.3.3"
 def jomlVersion = "1.10.5"
 def logbackVersion = "1.4.14"
@@ -13,6 +17,8 @@ def physxVersion = "2.7.2"
 def imguiVersion = "1.89.0"
 
 def os = System.getProperty("os.name").toLowerCase()
+def arch = System.getProperty("os.arch").toLowerCase()
+
 project.ext.lwjglNatives = {
     if (os.contains("win")) return "natives-windows"
     if (os.contains("mac")) return "natives-macos"
@@ -38,10 +44,8 @@ repositories {
 }
 
 dependencies {
-    // --- 数学库 (JOML) ---
+    // --- 依赖列表保持不变 ---
     implementation "org.joml:joml:${jomlVersion}"
-
-    // --- 渲染与核心 (LWJGL) ---
     implementation platform("org.lwjgl:lwjgl-bom:$lwjglVersion")
     implementation "org.lwjgl:lwjgl"
     implementation "org.lwjgl:lwjgl-glfw"
@@ -59,37 +63,138 @@ dependencies {
     runtimeOnly "org.lwjgl:lwjgl-stb::${project.lwjglNatives}"
     runtimeOnly "org.lwjgl:lwjgl-assimp::${project.lwjglNatives}"
 
-    // --- 现代化 UI 库 (Dear ImGui) ---
     implementation "io.github.spair:imgui-java-app:${imguiVersion}"
     implementation "io.github.spair:imgui-java-lwjgl3:${imguiVersion}"
-    implementation "io.github.spair:imgui-java-natives-windows:${imguiVersion}" // 默认引入 Windows
+    implementation "io.github.spair:imgui-java-natives-windows:${imguiVersion}"
     if (os.contains("mac")) implementation "io.github.spair:imgui-java-natives-macos:${imguiVersion}"
     if (os.contains("linux")) implementation "io.github.spair:imgui-java-natives-linux:${imguiVersion}"
 
-    // --- 物理引擎 (NVIDIA PhysX JNI) ---
     implementation "de.fabmax:physx-jni:${physxVersion}"
     runtimeOnly "de.fabmax:physx-jni:${physxVersion}:${project.physxNatives}"
     implementation "org.slf4j:slf4j-api:${slf4jVersion}"
     implementation "ch.qos.logback:logback-classic:${logbackVersion}"
 
-    // --- 脚本与工具 ---
     implementation 'org.graalvm.js:js:23.0.1'
     implementation 'org.graalvm.js:js-scriptengine:23.0.1'
     implementation 'io.github.classgraph:classgraph:4.8.165'
-
-    // --- 用于解析 JSON 数据
     implementation 'com.google.code.gson:gson:2.10.1'
-
-    // --- 浏览器 ---
     implementation 'me.friwi:jcefmaven:143.0.14'
-
     implementation 'net.java.dev.jna:jna-platform:5.13.0'
 
-    // --- 测试 ---
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
+
+// --- 修改任务 1: 复制依赖到 build/libs ---
+tasks.register('copyDependencies', Copy) {
+    group = "zenith engine"
+    description = "将重构后的补丁包和必要的原始依赖统一导出至 build/libs"
+
+    // 使用 EXCLUDE 策略，确保先进入的补丁包不会被后续同名的原始包覆盖
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    // 确保执行前补丁已生成
+    dependsOn 'applyClassRedirection'
+
+    // 1. 优先放入重构后的补丁包
+    from("${buildDir}/patched-libs") {
+        include "*.jar"
+    }
+
+    // 2. 放入原始依赖，同时应用物理排除逻辑防止原始包混入
+    from(configurations.runtimeClasspath) {
+        exclude { details ->
+            def patchedFile = file("${buildDir}/patched-libs/patched-${details.file.name}")
+            if (patchedFile.exists()) {
+                return true
+            }
+            return false
+        }
+    }
+
+    // 修改点：统一输出到 build/libs
+    into "${buildDir}/libs"
+}
+
+licenseReport {
+    // 强制输出格式为 JSON，方便我们的任务读取
+    outputDir = "$buildDir/reports/dependency-license"
+    projects = [project]
+    configurations = ['runtimeClasspath'] // 明确指定扫描运行时依赖
+
+    // 允许从仓库下载 POM 文件以获取协议信息
+    allowedLicensesFile = null
+}
+
+// --- 修改任务 2: 更新依赖文档路径 ---
+tasks.register('generateDependencyDoc') {
+    group = "zenith engine"
+    description = "生成包含重构状态和开源协议的详细文档"
+
+    // 确保顺序：先重构包 -> 后抓取协议 -> 最后整合文档
+    dependsOn 'applyClassRedirection', 'generateLicenseReport'
+
+    def outputFile = file("${buildDir}/libs/DEPENDENCIES.md")
+
+    doLast {
+        def licenseReportFile = file("${buildDir}/reports/dependency-license/index.json")
+        def licenseMap = [:]
+
+        // 尝试从插件报告中读取
+        if (licenseReportFile.exists()) {
+            try {
+                def json = new groovy.json.JsonSlurper().parseText(licenseReportFile.text)
+                json.dependencies.each { dep ->
+                    def key = "${dep.group}:${dep.name}".toString()
+                    // 优先取协议名，如果没有则取 URL 甚至直接标记 Unknown
+                    def licenseNames = dep.licenses.collect { it.name ?: it.url }.join(", ")
+                    licenseMap[key] = licenseNames ?: "Unknown"
+                }
+            } catch (Exception e) {
+                println "[Zenith] 警告：读取协议 JSON 失败: ${e.message}"
+            }
+        }
+
+        def report = StringBuilder.newInstance()
+        report << "# Zenith Engine 依赖库清单\n\n"
+        report << "> 存储位置: build/libs | 生成时间: ${new Date().format('yyyy-MM-dd HH:mm:ss')}\n\n"
+        report << "| 状态 | 组 (Group) | 名称 (Name) | 版本 (Version) | 开源协议 | 实际文件名 |\n"
+        report << "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+
+        configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts.each { artifact ->
+            def id = artifact.moduleVersion.id
+            def fileName = artifact.file.name
+            def groupNameKey = "${id.group}:${id.name}".toString()
+
+            // 匹配协议，如果插件没抓到，尝试根据已知常用库手动硬编码补偿（可选）
+            def license = licenseMap[groupNameKey] ?: "Unknown"
+
+            // 常见的 JCEF / LWJGL 协议补偿逻辑（如果依然显示 Unknown）
+            if (license == "Unknown") {
+                if (id.group.contains("lwjgl")) license = "BSD-3-Clause"
+                else if (id.group.contains("joml")) license = "MIT"
+                else if (id.group.contains("google")) license = "Apache-2.0"
+                else if (id.group.contains("jcef")) license = "BSD-3-Clause"
+            }
+
+            def patchedFile = file("${buildDir}/patched-libs/patched-${fileName}")
+
+            if (patchedFile.exists()) {
+                report << "| **[重构版]** | ${id.group} | ${id.name} | ${id.version} | ${license} | patched-${fileName} |\n"
+            } else {
+                report << "| 原始版 | ${id.group} | ${id.name} | ${id.version} | ${license} | ${fileName} |\n"
+            }
+        }
+
+        outputFile.parentFile.mkdirs()
+        outputFile.text = report.toString()
+        println "[Zenith] 依赖文档已导出至: ${outputFile.absolutePath}"
+    }
+}
+
+// 构建流程设置
+build.finalizedBy(copyDependencies, generateDependencyDoc)
 
 tasks.withType(JavaExec) {
     jvmArgs '-XX:-OmitStackTraceInFastThrow'

@@ -1,0 +1,12 @@
+plugins {
+    id 'groovy-gradle-plugin'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // 自动关联当前 Gradle 环境的 Groovy 版本
+    implementation localGroovy()
+}
