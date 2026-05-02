@@ -6,9 +6,6 @@ import com.zenith.ui.render.UIRenderContext;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * UI 屏幕基类 - 彻底修复右下角偏移问题
- */
 public abstract class UIScreen {
     protected final List<UIComponent> components = new ArrayList<>();
     protected boolean visible = true;
@@ -42,38 +39,67 @@ public abstract class UIScreen {
         }
     }
 
-    /**
-     * 鼠标移动：直接传递绝对屏幕坐标
-     */
     public boolean onMouseMove(float mx, float my) {
         if (!visible) return false;
         boolean consumed = false;
         for (int i = components.size() - 1; i >= 0; i--) {
             UIComponent comp = components.get(i);
-            // 绝对不能减去 bounds.x，直接传 mx, my
-            if (comp.onMouseMove(mx, my)) {
+            float localX = mx - comp.getBounds().x;
+            float localY = my - comp.getBounds().y;
+            if (comp.onMouseMove(localX, localY)) {
                 consumed = true;
             }
         }
         return consumed;
     }
 
-    /**
-     * 鼠标点击：直接传递绝对屏幕坐标
-     */
-    public boolean onMouseButton(int action, float mx, float my) {
+    // 接收并向下传递 button 参数
+    public boolean onMouseButton(int button, int action, float mx, float my) {
         if (!visible) return false;
-
         for (int i = components.size() - 1; i >= 0; i--) {
             UIComponent comp = components.get(i);
             if (comp.getBounds().contains(mx, my)) {
-                // 绝对不能减去 bounds.x，直接传 mx, my
-                comp.onMouseButton(action, mx, my);
-                return true;
+                float localX = mx - comp.getBounds().x;
+                float localY = my - comp.getBounds().y;
+                if (comp.onMouseButton(button, action, localX, localY)) {
+                    return true;
+                }
             }
         }
         return isModal();
     }
+
+    // 新增：向下分发键盘按键
+    public boolean onKey(int key, int scancode, int action, int mods) {
+        if (!visible) return false;
+        for (int i = components.size() - 1; i >= 0; i--) {
+            if (components.get(i).onKey(key, scancode, action, mods)) return true;
+        }
+        return false;
+    }
+
+    // 新增：向下分发字符输入
+    public boolean onChar(int codepoint) {
+        if (!visible) return false;
+        for (int i = components.size() - 1; i >= 0; i--) {
+            if (components.get(i).onChar(codepoint)) return true;
+        }
+        return false;
+    }
+
+    public boolean onScroll(float dx, float dy, float mx, float my) {
+        if (!visible) return false;
+        for (int i = components.size() - 1; i >= 0; i--) {
+            UIComponent comp = components.get(i);
+            if (comp.getBounds().contains(mx, my)) {
+                float localX = mx - comp.getBounds().x;
+                float localY = my - comp.getBounds().y;
+                if (comp.onScroll(dx, dy)) return true;
+            }
+        }
+        return false;
+    }
+
 
     public boolean isModal() { return false; }
     public void setVisible(boolean visible) { this.visible = visible; }

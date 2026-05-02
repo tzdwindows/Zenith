@@ -68,6 +68,12 @@ public class Test {
             }
 
             @Override public void onKey(int key, int scancode, int action, int mods) {}
+
+            @Override
+            public void onChar(int codepoint) {
+
+            }
+
             @Override public void onResize(int width, int height) {
                 glViewport(0, 0, width, height);
                 camera.getProjection().updateSize(width, height);

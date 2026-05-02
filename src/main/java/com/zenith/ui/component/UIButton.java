@@ -140,7 +140,8 @@ public class UIButton extends UIComponent {
     }
 
     @Override
-    public boolean onMouseButton(int action, float mx, float my) {
+    public boolean onMouseButton(int button, int action, float mx, float my) {
+        if (button != 0) return false;
         boolean inside = bounds.contains(mx, my);
 
         if (action == 1) {

@@ -12,6 +12,8 @@ public interface Window {
         // 键盘事件：key(键位), scancode(扫描码), action(按下/释放/重复), mods(修饰键如Shift/Ctrl)
         void onKey(int key, int scancode, int action, int mods);
 
+        default void onChar(int codepoint){};
+
         // 鼠标移动事件
         void onCursorPos(double xpos, double ypos);
 

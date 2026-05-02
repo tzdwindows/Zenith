@@ -33,6 +33,8 @@ project.ext.physxNatives = {
 
 repositories {
     mavenCentral()
+    maven { url 'https://maven.pkg.github.com/jcefmaven/jcefmaven' }
+    maven { url 'https://plugins.gradle.org/m2/' }
 }
 
 dependencies {
@@ -78,10 +80,20 @@ dependencies {
     // --- 用于解析 JSON 数据
     implementation 'com.google.code.gson:gson:2.10.1'
 
+    // --- 浏览器 ---
+    implementation 'me.friwi:jcefmaven:143.0.14'
+
+    implementation 'net.java.dev.jna:jna-platform:5.13.0'
+
     // --- 测试 ---
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.withType(JavaExec) {
+    jvmArgs '-XX:-OmitStackTraceInFastThrow'
+    jvmArgs '-XX:+StackTraceInThrowable'
 }
 
 test {

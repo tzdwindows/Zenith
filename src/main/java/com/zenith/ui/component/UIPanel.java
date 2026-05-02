@@ -99,19 +99,29 @@ public class UIPanel extends UIContainer {
     }
 
     @Override
-    public boolean onMouseButton(int action, float mx, float my) {
+    public boolean onMouseButton(int button, int action, float mx, float my) {
         for (int i = children.size() - 1; i >= 0; i--) {
             UIComponent child = children.get(i);
             if (!child.isVisible()) continue;
             if (child.getBounds().contains(mx, my)) {
                 float childX = mx - child.getBounds().x;
                 float childY = my - child.getBounds().y;
-
-                if (child.onMouseButton(action, childX, childY)) {
+                if (child.onMouseButton(button, action, childX, childY)) {
                     return true;
                 }
             }
         }
         return mx >= 0 && mx <= bounds.width && my >= 0 && my <= bounds.height;
+    }
+
+
+    @Override
+    public boolean onScroll(float dx, float dy) {
+        for (int i = children.size() - 1; i >= 0; i--) {
+            if (children.get(i).isVisible() && children.get(i).onScroll(dx, dy)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

@@ -64,6 +64,10 @@ public class GLWindow implements Window {
             if (eventListener != null) eventListener.onKey(key, scancode, action, mods);
         });
 
+        glfwSetCharCallback(windowHandle, (window, codepoint) -> {
+            if (eventListener != null) eventListener.onChar(codepoint);
+        });
+
         glfwSetCursorPosCallback(windowHandle, (window, xpos, ypos) -> {
             if (eventListener != null) eventListener.onCursorPos(xpos, ypos);
         });

@@ -1,6 +1,7 @@
 package com.zenith.core;
 
 import com.zenith.common.config.RayTracingConfig;
+import com.zenith.common.utils.InternalLogger;
 import com.zenith.render.*;
 import com.zenith.render.backend.opengl.*;
 import com.zenith.render.backend.opengl.buffer.GLBufferBuilder;
@@ -376,8 +377,6 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     @Override
     public void onKey(int key, int scancode, int action, int mods) {
         if (key >= 0 && key < keys.length) keys[key] = (action != GLFW_RELEASE);
-
-        // 加载时禁用快捷键
         if (isLoading) return;
 
         if (action == GLFW_PRESS) {
@@ -391,6 +390,26 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
                         escScreen.setVisible(!isCursorLocked);
                     }
                     break;
+            }
+        }
+
+        if (!isCursorLocked) {
+            if (escScreen != null && escScreen.isVisible() && escScreen.onKey(key, scancode, action, mods)) return;
+            for (int i = screens.size() - 1; i >= 0; i--) {
+                UIScreen screen = screens.get(i);
+                if (screen.isVisible() && screen.onKey(key, scancode, action, mods)) return;
+            }
+        }
+    }
+
+    @Override
+    public void onChar(int codepoint) {
+        if (isLoading) return;
+        if (!isCursorLocked) {
+            if (escScreen != null && escScreen.isVisible() && escScreen.onChar(codepoint)) return;
+            for (int i = screens.size() - 1; i >= 0; i--) {
+                UIScreen screen = screens.get(i);
+                if (screen.isVisible() && screen.onChar(codepoint)) return;
             }
         }
     }
@@ -437,27 +456,35 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
         if (isLoading) return;
 
         if (!isCursorLocked) {
-            // --- 修复点 3：如果点击了窗口，且 ESC 菜单没打开，尝试找回焦点 ---
-            if (action == GLFW_PRESS && button == GLFW_MOUSE_BUTTON_LEFT) {
-                if (escScreen != null && !escScreen.isVisible()) {
-                    setCursorMode(true);
-                    return;
-                }
-            }
-
             double[] x = new double[1], y = new double[1];
             glfwGetCursorPos(((GLWindow)window).getHandle(), x, y);
             float mx = (float)x[0], my = (float)y[0];
 
+            // 🌟 1. 先让 UI 尝试处理（包括 HTMLComponent）
+            boolean consumed = false;
             if (escScreen != null && escScreen.isVisible()) {
-                if (escScreen.onMouseButton(action, mx, my)) return;
+                if (escScreen.onMouseButton(button, action, mx, my)) consumed = true;
             }
-            for (int i = screens.size() - 1; i >= 0; i--) {
-                UIScreen screen = screens.get(i);
-                if (screen.isVisible() && screen.onMouseButton(action, mx, my)) return;
+
+            if (!consumed) {
+                for (int i = screens.size() - 1; i >= 0; i--) {
+                    UIScreen screen = screens.get(i);
+                    if (screen.isVisible() && screen.onMouseButton(button, action, mx, my)) {
+                        consumed = true;
+                        break;
+                    }
+                }
+            }
+
+            // 🌟 2. 只有 UI 没处理这个点击，且是左键按下，才进入视角锁定
+            if (!consumed && action == GLFW_PRESS && button == GLFW_MOUSE_BUTTON_LEFT) {
+                if (escScreen != null && !escScreen.isVisible()) {
+                    setCursorMode(true);
+                }
             }
         }
     }
+
 
 
     @Override
@@ -465,6 +492,18 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
         if (isLoading) return;
         if (isCursorLocked) {
             camera.getTransform().getPosition().y += (float)y * 2.0f;
+        } else {
+            double[] cx = new double[1], cy = new double[1];
+            glfwGetCursorPos(((GLWindow)window).getHandle(), cx, cy);
+            float mx = (float)cx[0], my = (float)cy[0];
+
+            if (escScreen != null && escScreen.isVisible()) {
+                if (escScreen.onScroll((float)x, (float)y, mx, my)) return;
+            }
+            for (int i = screens.size() - 1; i >= 0; i--) {
+                UIScreen screen = screens.get(i);
+                if (screen.isVisible() && screen.onScroll((float)x, (float)y, mx, my)) return;
+            }
         }
     }
 

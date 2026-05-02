@@ -143,6 +143,38 @@ public class UIRenderContext {
     }
 
     /**
+     * 在指定位置按指定大小渲染完整纹理
+     * @param texture 要渲染的纹理对象
+     * @param x 起始 X 坐标（局部空间）
+     * @param y 起始 Y 坐标（局部空间）
+     * @param w 宽度
+     * @param h 高度
+     */
+    public void drawTexture(com.zenith.render.Texture texture, float x, float y, float w, float h) {
+        drawTexture(texture, x, y, w, h, Color.WHITE);
+    }
+
+    /**
+     * 在指定位置按指定大小渲染完整纹理（支持颜色过滤/混合）
+     * @param texture 要渲染的纹理对象
+     * @param x 起始 X 坐标
+     * @param y 起始 Y 坐标
+     * @param w 宽度
+     * @param h 高度
+     * @param color 颜色乘法器（通常传 Color.WHITE 保持原样）
+     */
+    public void drawTexture(com.zenith.render.Texture texture, float x, float y, float w, float h, Color color) {
+        if (texture == null) return;
+
+        // 1. 确保当前绑定了该纹理，如果更换了纹理会自动调用 flushBatch()
+        bindTexture(texture);
+
+        // 2. 调用现有的 drawTextureRect，使用完整的纹理坐标 (0,0) 到 (1,1)
+        // 注意：如果你发现渲染出来的 HTML 画面是倒过来的，请将 v 改为 1, uh 改为 -1
+        drawTextureRect(x, y, w, h, 0, 0, 1, 1, color);
+    }
+
+    /**
      * 使用图集渲染指定的图标
      * @param atlas 解析后的图集对象
      * @param spriteName XML 中的名称，例如 "gear.png"
