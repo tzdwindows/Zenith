@@ -318,6 +318,9 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
         this.isRunning = running;
     }
 
+    public double getEngineTime() {
+        return glfwGetTime();
+    }
     private void updateCameraInput(float deltaTime) {
         Vector3f pos = camera.getTransform().getPosition();
         float currentSpeed = (keys[GLFW_KEY_LEFT_CONTROL] || keys[GLFW_KEY_RIGHT_CONTROL])

@@ -59,4 +59,9 @@ public abstract class Camera {
     public Vector3f getRight() {
         return transform.getRight();
     }
+
+    public org.joml.Matrix4f getViewProjectionMatrix() {
+        org.joml.Matrix4f vpm = new org.joml.Matrix4f();
+        return getProjectionMatrix().mul(getViewMatrix(), vpm);
+    }
 }
