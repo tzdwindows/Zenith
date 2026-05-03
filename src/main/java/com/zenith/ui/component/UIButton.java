@@ -37,7 +37,7 @@ public class UIButton extends UIComponent {
     private String labelText = null;
 
     private String tooltipText = null;
-    private float mouseX, mouseY;
+    private float tooltipMouseX, tooltipMouseY;
     private Runnable onClickAction;
 
     public UIButton(float x, float y, float width, float height,
@@ -123,16 +123,19 @@ public class UIButton extends UIComponent {
 
     public void renderOverlay(UIRenderContext ctx) {
         if (isHovered && !pressedInside && tooltipText != null) {
-            ctx.drawTooltip(tooltipText, mouseX, mouseY);
+            ctx.drawTooltip(tooltipText, tooltipMouseX, tooltipMouseY);
         }
     }
 
     @Override
     public boolean onMouseMove(float mx, float my) {
-        this.mouseX = mx;
-        this.mouseY = my;
+        // UIScreen provides local coordinates; tooltip needs screen coordinates.
+        this.tooltipMouseX = bounds.x + mx;
+        this.tooltipMouseY = bounds.y + my;
         boolean wasHovered = this.isHovered;
-        this.isHovered = bounds.contains(mx, my);
+        // UIScreen passes local coordinates (relative to this component).
+        // Don't use absolute bounds.contains here, or hover/click will never work once the button is positioned.
+        this.isHovered = (mx >= 0 && my >= 0 && mx <= bounds.width && my <= bounds.height);
 
         this.isPressed = this.pressedInside && this.isHovered;
 
@@ -142,7 +145,8 @@ public class UIButton extends UIComponent {
     @Override
     public boolean onMouseButton(int button, int action, float mx, float my) {
         if (button != 0) return false;
-        boolean inside = bounds.contains(mx, my);
+        // UIScreen passes local coordinates.
+        boolean inside = (mx >= 0 && my >= 0 && mx <= bounds.width && my <= bounds.height);
 
         if (action == 1) {
             if (inside) {

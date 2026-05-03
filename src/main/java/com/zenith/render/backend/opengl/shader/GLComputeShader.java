@@ -87,10 +87,11 @@ public class GLComputeShader extends Shader {
     @Override public void setUniform(String n, Vector3f v) { glUniform3f(getUniformLocation(n), v.x, v.y, v.z); }
     @Override public void setUniform(String n, Vector4f v) { glUniform4f(getUniformLocation(n), v.x, v.y, v.z, v.w); }
     @Override public void setUniform(String n, float v) { glUniform1f(getUniformLocation(n), v); }
+    @Override public void setUniform(String n, int v) { glUniform1i(getUniformLocation(n), v); }
     @Override public void setUniform(String n, boolean v) { glUniform1i(getUniformLocation(n), v ? 1 : 0); }
 
     // 额外支持 int，对路径追踪的计数器至关重要
-    public void setUniform(String n, int v) { glUniform1i(getUniformLocation(n), v); }
+
 
     @Override
     public void setUniform(String n, Matrix4f m) {

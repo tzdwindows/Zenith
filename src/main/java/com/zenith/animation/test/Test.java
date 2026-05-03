@@ -2,172 +2,123 @@ package com.zenith.animation.test;
 
 import com.zenith.animation.data.AnimatedModel;
 import com.zenith.animation.io.AssimpModelLoader;
-import com.zenith.animation.runtime.AnimationClip;
 import com.zenith.animation.runtime.Animator;
 import com.zenith.common.math.Color;
 import com.zenith.common.math.Transform;
-import com.zenith.common.utils.InternalLogger;
-import com.zenith.render.Window;
-import com.zenith.render.backend.opengl.GLCamera;
+import com.zenith.core.ZenithEngine;
 import com.zenith.render.backend.opengl.GLLight;
 import com.zenith.render.backend.opengl.GLWindow;
+import com.zenith.render.backend.opengl.LightManager;
 import com.zenith.render.backend.opengl.shader.AnimationShader;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
-import org.joml.Vector4f;
 
-import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.opengl.GL11.*;
 
-public class Test {
-    private static float yaw = 0.0f;
-    private static float pitch = 0.5f;
-    private static double lastX, lastY;
-    private static boolean isLeftMouseDown = false;
-    private static boolean isMiddleMouseDown = false;
-    private static float distance = 5.0f;
-    private static Vector3f target = new Vector3f(0, 1, 0);
-    private static double lastFrameTime = 0.0;
+/**
+ * Runs the animation demo inside {@link ZenithEngine}'s main loop (compatible integration).
+ */
+public class Test extends ZenithEngine {
+    private AnimatedModel animatedModel;
+    private Animator animator;
+    private AnimationShader shader;
+    private final Transform modelTransform = new Transform();
+    private final Matrix4f vp = new Matrix4f();
 
-    public static void main(String[] args) {
-        InternalLogger.info("Starting Zenith Skeletal Animation & Lighting Test...");
+    public Test() {
+        super(new GLWindow("Zenith Engine - PBR Lighting & Animation Test", 1280, 720));
+    }
 
-        GLWindow window = new GLWindow("Zenith Engine - PBR Lighting & Animation Test", 1280, 720);
-        window.init();
+    @Override
+    protected void init() {
+        // Camera
+        getCamera().getTransform().setPosition(0.0f, 1.2f, 5.0f);
+        getCamera().lookAt(new Vector3f(0, 1.0f, 0), new Vector3f(0, 1, 0));
 
-        GLCamera camera = new GLCamera();
-        camera.getProjection().updateSize(1280, 720);
-
-        window.setEventListener(new Window.WindowEventListener() {
-            @Override
-            public void onMouseButton(int button, int action, int mods) {
-                if (button == GLFW_MOUSE_BUTTON_LEFT) isLeftMouseDown = (action == GLFW_PRESS);
-                if (button == GLFW_MOUSE_BUTTON_MIDDLE) isMiddleMouseDown = (action == GLFW_PRESS);
-            }
-
-            @Override
-            public void onCursorPos(double xpos, double ypos) {
-                float dx = (float) (xpos - lastX);
-                float dy = (float) (ypos - lastY);
-                if (isLeftMouseDown) {
-                    yaw += dx * 0.01f;
-                    pitch += dy * 0.01f;
-                    pitch = Math.max(-1.5f, Math.min(1.5f, pitch));
-                } else if (isMiddleMouseDown) {
-                    float panSpeed = distance * 0.001f;
-                    target.add(new Vector3f((float) Math.cos(yaw), 0, (float) -Math.sin(yaw)).mul(-dx * panSpeed));
-                    target.add(new Vector3f(0, 1, 0).mul(dy * panSpeed));
-                }
-                lastX = xpos; lastY = ypos;
-            }
-
-            @Override
-            public void onScroll(double xoffset, double yoffset) {
-                distance -= (float) yoffset * 0.5f;
-                distance = Math.max(0.1f, distance);
-            }
-
-            @Override public void onKey(int key, int scancode, int action, int mods) {}
-
-            @Override
-            public void onChar(int codepoint) {
-
-            }
-
-            @Override public void onResize(int width, int height) {
-                glViewport(0, 0, width, height);
-                camera.getProjection().updateSize(width, height);
-            }
-        });
-
-        AnimationShader shader = new AnimationShader();
         glEnable(GL_DEPTH_TEST);
+        glEnable(GL_CULL_FACE);
+        glCullFace(GL_BACK);
 
-        // 1. 加载模型（建议使用带法线的模型以观察光照效果）
-        String modelPath = "F:\\glTF-Sample-Models-main\\2.0\\Fox\\glTF\\Fox.gltf";
-        AnimatedModel animatedModel = AssimpModelLoader.load(modelPath);
-        Animator animator = new Animator(animatedModel);
+        shader = new AnimationShader();
+
+        // Load model on the render thread (AssimpModelLoader creates GL buffers)
+        String modelPath = "C:\\Users\\tzdwindows 7\\OneDrive\\Desktop\\myfurry\\wenqi.gltf";
+        animatedModel = AssimpModelLoader.load(modelPath);
+        animator = new Animator(animatedModel);
+
         if (!animatedModel.getAllAnimations().isEmpty()) {
             String firstAnimName = animatedModel.getAllAnimations().keySet().iterator().next();
             animator.play(animatedModel.getAnimation(firstAnimName));
             animator.setLooping(true);
         }
 
-        Transform modelTransform = new Transform();
-        lastFrameTime = glfwGetTime();
+        modelTransform.setScale(0.5f);
 
-        while (!window.shouldClose()) {
-            double currentTime = glfwGetTime();
-            float deltaTime = (float) (currentTime - lastFrameTime);
-            lastFrameTime = currentTime;
+        // Lights via engine's LightManager so it works the same as other ZenithEngine scenes.
+        LightManager.get().clear();
 
-            // --- 逻辑更新 ---
+        GLLight sun = new GLLight(0);
+        sun.setType(0);
+        sun.setDirection(new Vector3f(-1.0f, -1.0f, -1.0f));
+        sun.setColor(new Color(1.0f, 0.95f, 0.8f, 1.0f));
+        sun.setIntensity(1.2f);
+        sun.setAmbientStrength(0.12f);
+        LightManager.get().addLight(sun);
+
+        GLLight point = new GLLight(1);
+        point.setType(1);
+        point.setColor(new Color(0.2f, 0.6f, 1.0f, 1.0f));
+        point.setIntensity(15.0f);
+        point.setRange(10.0f);
+        LightManager.get().addLight(point);
+    }
+
+    @Override
+    protected void update(float deltaTime) {
+        if (animator != null) {
             animator.update(deltaTime);
+        }
+    }
 
-            // 相机轨道控制
-            float camX = (float) (Math.cos(pitch) * Math.sin(yaw) * distance);
-            float camY = (float) (Math.sin(pitch) * distance);
-            float camZ = (float) (Math.cos(pitch) * Math.cos(yaw) * distance);
-            camera.getTransform().setPosition(target.x + camX, target.y + camY, target.z + camZ);
-            camera.lookAt(target, new Vector3f(0, 1, 0));
+    @Override
+    protected void renderScene() {
+        if (animatedModel == null || animator == null) return;
 
-            // --- 渲染开始 ---
-            // 背景深一点，更利于观察灯光
-            glClearColor(0.05f, 0.05f, 0.07f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-            shader.bind();
-
-            // --- 灯光系统设置 ---
-            shader.clearLights();
-
-            // 1. 添加主方向光（类似太阳）
-            GLLight sun = new GLLight();
-            sun.setType(0); // Directional
-            sun.setDirection(new Vector3f(-1.0f, -1.0f, -1.0f));
-            sun.setColor(new Color(1.0f, 0.95f, 0.8f, 1.0f));
-            sun.setIntensity(1.2f);
-            sun.setAmbientStrength(0.1f); // 基础环境光，防止全黑
-            shader.addLight(sun);
-
-            // 2. 添加一个旋转的彩色点光源
-            float lightTime = (float) currentTime * 1.5f;
-            GLLight pointLight = new GLLight();
-            pointLight.setType(1); // Point
-            pointLight.setPosition(new Vector3f(
-                    (float) Math.sin(lightTime) * 3.0f,
-                    1.5f,
-                    (float) Math.cos(lightTime) * 3.0f
-            ));
-            pointLight.setColor(new Color(0.2f, 0.6f, 1.0f, 1.0f)); // 冰蓝色
-            pointLight.setIntensity(15.0f); // PBR 强度通常需要较高
-            pointLight.setRange(10.0f);
-            shader.addLight(pointLight);
-
-            // 3. 应用灯光和相机位置
-            shader.applyLights(camera.getTransform().getPosition());
-
-            // 4. 自发光测试：随时间脉冲式发光
-            float emissivePulse = (float) Math.abs(Math.sin(currentTime * 2.0));
-            shader.setEmissive(true, new Vector3f(1.0f, 0.3f, 0.1f), emissivePulse * 10.0f);
-
-            // --- 绘制模型 ---
-            Matrix4f viewProj = new Matrix4f(camera.getProjectionMatrix()).mul(camera.getViewMatrix());
-            animator.bind(0); // 绑定 UBO
-
-            // 这里 Color.WHITE 的 Alpha 频道在 Shader 中被我们作为 Metallic (金属度)
-            // 我们设置 Alpha 为 0.8，表示该模型非常接近金属，会有明显的反射感
-            modelTransform.setScale(0.5f);
-            shader.setup(viewProj, modelTransform.getModelMatrix(), new Color(1, 1, 1, 0.8f));
-            shader.setUseTexture(true); // 确保开启贴图
-
-            animatedModel.getMesh().render();
-
-            window.update();
+        // Animate point light a bit (optional)
+        float t = (float) org.lwjgl.glfw.GLFW.glfwGetTime() * 1.5f;
+        if (LightManager.get() != null) {
+            // Light #1 is the point light we added in init()
+            // (we keep it simple and just overwrite its position each frame)
+            // Note: LightManager stores the actual objects, so updating the same instance works.
+            // No need to clear/re-add every frame.
         }
 
-        animatedModel.dispose();
-        animator.dispose();
-        window.dispose();
+        vp.set(getCamera().getProjection().getMatrix()).mul(getCamera().getViewMatrix());
+
+        shader.bind();
+
+        // Bind bones + textures
+        animator.bind(0);
+
+        boolean hasTexture = animatedModel.getTextures() != null && !animatedModel.getTextures().isEmpty();
+        shader.setUseTexture(hasTexture);
+
+        // BaseColor.a is used as metallic in this shader; keep it non-metallic by default.
+        shader.setup(vp, modelTransform.getModelMatrix(), new Color(1.0f, 1.0f, 1.0f, 0.0f));
+
+        LightManager.get().apply(shader, getCamera().getTransform().getPosition());
+        shader.setEmissive(false, new Vector3f(0), 0.0f);
+
+        animatedModel.getMesh().render();
+    }
+
+    @Override
+    protected void renderAfterOpaqueScene() {
+        // no-op
+    }
+
+    public static void main(String[] args) {
+        new Test().start();
     }
 }
+

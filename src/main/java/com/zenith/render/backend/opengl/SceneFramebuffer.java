@@ -81,7 +81,8 @@ public class SceneFramebuffer {
         int internalFormat = RenderConfig.FBO_INTERNAL_FORMAT;
         updateTextureSize(colorTex, internalFormat, GL_RGBA, GL_FLOAT);
         updateTextureSize(depthTex, GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT);
-        updateTextureSize(rayTraceTex, internalFormat, GL_RGBA, GL_FLOAT);
+        // Ray tracing target is always HDR half-float.
+        updateTextureSize(rayTraceTex, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT);
         updateTextureSize(colorCopyTex, internalFormat, GL_RGBA, GL_FLOAT);
         updateTextureSize(depthCopyTex, GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT);
 

@@ -1,18 +1,24 @@
 #version 430 core
 
 #define PI 3.14159265359
+// Set to 1 to bypass BVH tracing for crash isolation.
+#ifndef ZENITH_RT_SAFE_MODE
+#define ZENITH_RT_SAFE_MODE 0
+#endif
 
 struct Vertex {
     vec4 position;
     vec4 normal;
     vec4 texCoord;
+    vec4 color;
 };
 
+// NOTE: SSBO data for BVH nodes is packed as 8 floats per node on CPU:
+// [min.x, min.y, min.z, leftFirst, max.x, max.y, max.z, triCount]
+// Using two vec4s matches this layout under std430 without padding surprises.
 struct BVHNode {
-    vec3 aabbMin;
-    int leftFirst;
-    vec3 aabbMax;
-    int triCount;
+    vec4 aabbMin_leftFirst;
+    vec4 aabbMax_triCount;
 };
 
 layout(std430, binding = 2) buffer VertexBuffer { Vertex vertices[]; };
@@ -22,6 +28,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(rgba16f, binding = 0) uniform image2D imgOutput;
 layout(binding = 1) uniform sampler2D u_BaseColor;
+layout(binding = 4) uniform sampler2D u_AlbedoTex;
 
 uniform mat4 u_InvViewProj;
 uniform vec3 u_CamPos;
@@ -30,6 +37,8 @@ uniform vec3 u_CamRight;
 uniform vec3 u_CamUp;
 uniform int u_SampleCount;
 uniform int u_VertexCount;
+uniform int u_BvhNodeCount;
+uniform int u_HasAlbedoTex;
 
 // 电影级调节参数
 uniform int u_MaxBounces;
@@ -44,6 +53,8 @@ uniform int u_RTMode;          // 0=纯光追展示, 1=混合贴图
 // 核心数学与随机数
 // ==========================================
 uint seed;
+int gBestVertBase = -1;
+vec2 gBestBary = vec2(0.0);
 uint pcg_hash(uint i) {
     uint state = i * 747796405u + 2891336453u;
     uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
@@ -84,11 +95,19 @@ bool traceScene(vec3 ro, vec3 rd, out float tNear, out vec3 hitNormal, out vec2 
     int stack[128]; int stackPtr = 0; stack[stackPtr++] = 0;
     int bestVertBase = -1; vec2 bestBary = vec2(0.0);
     while (stackPtr > 0) {
-        int nodeIdx = stack[--stackPtr]; BVHNode node = bvhNodes[nodeIdx];
-        if (rayAABBIntersect(ro, invRd, node.aabbMin, node.aabbMax) >= tNear) continue;
-        if (node.triCount > 0) {
-            for (int i = 0; i < node.triCount; i++) {
-                int vertBase = (node.leftFirst + i) * 3;
+        int nodeIdx = stack[--stackPtr];
+        if (nodeIdx < 0 || nodeIdx >= u_BvhNodeCount) continue;
+        BVHNode node = bvhNodes[nodeIdx];
+        vec3 aabbMin = node.aabbMin_leftFirst.xyz;
+        vec3 aabbMax = node.aabbMax_triCount.xyz;
+        if (rayAABBIntersect(ro, invRd, aabbMin, aabbMax) >= tNear) continue;
+        int triCount = int(node.aabbMax_triCount.w + 0.5);
+        int leftFirst = int(node.aabbMin_leftFirst.w + 0.5);
+        if (leftFirst < 0) continue;
+        if (triCount > 0) {
+            if (leftFirst >= (u_VertexCount / 3)) continue;
+            for (int i = 0; i < triCount; i++) {
+                int vertBase = (leftFirst + i) * 3;
                 if (vertBase + 2 >= u_VertexCount) continue;
                 float t; vec2 bary;
                 if (rayTriangleIntersect(vertices[vertBase].position.xyz, vertices[vertBase+1].position.xyz, vertices[vertBase+2].position.xyz, ro, rd, t, bary)) {
@@ -96,9 +115,14 @@ bool traceScene(vec3 ro, vec3 rd, out float tNear, out vec3 hitNormal, out vec2 
                 }
             }
         } else {
-            int c1 = node.leftFirst, c2 = node.leftFirst + 1;
-            float d1 = rayAABBIntersect(ro, invRd, bvhNodes[c1].aabbMin, bvhNodes[c1].aabbMax);
-            float d2 = rayAABBIntersect(ro, invRd, bvhNodes[c2].aabbMin, bvhNodes[c2].aabbMax);
+            int c1 = leftFirst, c2 = leftFirst + 1;
+            if (c1 < 0 || c2 < 0 || c1 >= u_BvhNodeCount || c2 >= u_BvhNodeCount) continue;
+            vec3 c1Min = bvhNodes[c1].aabbMin_leftFirst.xyz;
+            vec3 c1Max = bvhNodes[c1].aabbMax_triCount.xyz;
+            vec3 c2Min = bvhNodes[c2].aabbMin_leftFirst.xyz;
+            vec3 c2Max = bvhNodes[c2].aabbMax_triCount.xyz;
+            float d1 = rayAABBIntersect(ro, invRd, c1Min, c1Max);
+            float d2 = rayAABBIntersect(ro, invRd, c2Min, c2Max);
             if (d1 > d2) {
                 if (d1 < tNear && stackPtr < 128) stack[stackPtr++] = c1;
                 if (d2 < tNear && stackPtr < 128) stack[stackPtr++] = c2;
@@ -112,8 +136,31 @@ bool traceScene(vec3 ro, vec3 rd, out float tNear, out vec3 hitNormal, out vec2 
         float w = 1.0 - bestBary.x - bestBary.y;
         hitNormal = normalize(vertices[bestVertBase].normal.xyz * w + vertices[bestVertBase+1].normal.xyz * bestBary.x + vertices[bestVertBase+2].normal.xyz * bestBary.y);
         hitUV = vertices[bestVertBase].texCoord.xy * w + vertices[bestVertBase+1].texCoord.xy * bestBary.x + vertices[bestVertBase+2].texCoord.xy * bestBary.y;
+        gBestVertBase = bestVertBase;
+        gBestBary = bestBary;
     }
     return hit;
+}
+
+float getMaterialId(int bestVertBase, vec2 bary) {
+    float w = 1.0 - bary.x - bary.y;
+    return vertices[bestVertBase].texCoord.z * w
+        + vertices[bestVertBase + 1].texCoord.z * bary.x
+        + vertices[bestVertBase + 2].texCoord.z * bary.y;
+}
+
+vec3 getVertexColor(int bestVertBase, vec2 bary) {
+    float w = 1.0 - bary.x - bary.y;
+    return vertices[bestVertBase].color.rgb * w
+        + vertices[bestVertBase + 1].color.rgb * bary.x
+        + vertices[bestVertBase + 2].color.rgb * bary.y;
+}
+
+vec3 sampleAlbedo(vec2 uv, vec3 vtxColor) {
+    if (u_HasAlbedoTex == 1) {
+        return texture(u_AlbedoTex, uv).rgb;
+    }
+    return vtxColor;
 }
 
 // ==========================================
@@ -156,6 +203,18 @@ void main() {
     ivec2 pixelCoords = ivec2(gl_GlobalInvocationID.xy);
     ivec2 res = imageSize(imgOutput);
     if (pixelCoords.x >= res.x || pixelCoords.y >= res.y) return;
+
+#if ZENITH_RT_SAFE_MODE == 1
+    // Crash isolation: just write sky gradient without any SSBO reads.
+    vec2 uv = (vec2(pixelCoords) + 0.5) / vec2(res);
+    vec3 c = mix(vec3(0.55, 0.70, 0.95), vec3(0.95, 0.95, 1.0), uv.y);
+    imageStore(imgOutput, pixelCoords, vec4(c, 1.0));
+    return;
+#endif
+    if (u_VertexCount <= 0 || u_BvhNodeCount <= 0) {
+        imageStore(imgOutput, pixelCoords, vec4(0.0, 0.0, 0.0, 1.0));
+        return;
+    }
 
     // 提取光栅化生成的带有贴图的原始画面
     vec4 screenColor = texelFetch(u_BaseColor, pixelCoords, 0);
@@ -237,10 +296,15 @@ void main() {
         rayOrigin = hitPos + normal * 0.001;
 
         // 生成程序化金属 PBR 地砖
-        float grid = mod(floor(uv.x * 15.0) + floor(uv.y * 15.0), 2.0);
-        vec3 albedo = mix(vec3(0.05), vec3(0.9), grid);
-        float roughness = mix(0.05, 0.8, grid);
-        float metallic = mix(1.0, 0.0, grid);
+        // Material id is stored in texCoord.z (packed on CPU side).
+        float materialId = getMaterialId(gBestVertBase, gBestBary);
+
+        vec3 vtxColor = getVertexColor(gBestVertBase, gBestBary);
+        vec3 albedo = sampleAlbedo(uv, vtxColor);
+        albedo = pow(max(albedo, 0.0), vec3(2.2));
+
+        float roughness = (materialId > 0.5) ? 0.03 : 0.6;
+        float metallic = 0.0;
         vec3 F0 = mix(vec3(0.04), albedo, metallic);
         vec3 V = normalize(-rayDir);
 
@@ -260,16 +324,33 @@ void main() {
         }
 
         // 间接反弹与轮盘赌
-        vec3 F_bounce = fresnelSchlick(max(dot(normal, V), 0.0), F0);
-        float probSpecular = clamp(max(F_bounce.x, max(F_bounce.y, F_bounce.z)), 0.1, 0.9);
-
-        if (rand() < probSpecular) {
-            vec3 H = importanceSampleGGX(vec2(rand(), rand()), normal, roughness);
-            rayDir = reflect(-V, H);
-            throughput *= F_bounce / probSpecular;
+        if (materialId > 0.5) {
+            float ior = 1.333;
+            float cosi = clamp(dot(normal, V), 0.0, 1.0);
+            float eta = 1.0 / ior;
+            float sin2t = eta * eta * (1.0 - cosi * cosi);
+            float Fr = fresnelSchlick(cosi, vec3(0.02)).x;
+            bool tir = sin2t > 1.0;
+            float prob = tir ? 1.0 : Fr;
+            if (rand() < prob) {
+                rayDir = reflect(-V, normal);
+                throughput *= vec3(0.98) / max(prob, 1e-3);
+            } else {
+                rayDir = refract(-V, normal, eta);
+                throughput *= vec3(0.90, 0.96, 1.0) / max(1.0 - prob, 1e-3);
+            }
         } else {
-            rayDir = cosineSampleHemisphere(normal);
-            throughput *= albedo * (1.0 - metallic) / (1.0 - probSpecular);
+            vec3 F_bounce = fresnelSchlick(max(dot(normal, V), 0.0), F0);
+            float probSpecular = clamp(max(F_bounce.x, max(F_bounce.y, F_bounce.z)), 0.1, 0.9);
+
+            if (rand() < probSpecular) {
+                vec3 H = importanceSampleGGX(vec2(rand(), rand()), normal, roughness);
+                rayDir = reflect(-V, H);
+                throughput *= F_bounce / probSpecular;
+            } else {
+                rayDir = cosineSampleHemisphere(normal);
+                throughput *= albedo / (1.0 - probSpecular);
+            }
         }
 
         if (dot(rayDir, normal) <= 0.0) {

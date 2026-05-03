@@ -222,6 +222,10 @@ public class GLShader extends Shader {
         glUniform1f(getUniformLocation(n), v);
     }
 
+    @Override public void setUniform(String n, int v) {
+        glUniform1i(getUniformLocation(n), v);
+    }
+
     @Override public void setUniform(String n, boolean v) {
         glUniform1i(getUniformLocation(n), v ? 1 : 0);
     }

@@ -28,6 +28,7 @@ public abstract class Shader {
     public abstract void setUniform(String name, Vector3f vector);
     public abstract void setUniform(String name, Vector4f vector);
     public abstract void setUniform(String name, float value);
+    public abstract void setUniform(String name, int value);
     public abstract void setUniform(String name, boolean value);
     public abstract boolean hasUniform(String uLightCount);
 

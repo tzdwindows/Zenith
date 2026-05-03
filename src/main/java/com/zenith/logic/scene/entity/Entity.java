@@ -204,15 +204,13 @@ public abstract class Entity {
             component.setOwner(this);
 
             /** 自动分类组件引用 **/
-            switch (component) {
-                case Collider c -> {
-                    this.colliders.add(c);
-                    if (primaryCollider == null) primaryCollider = c;
-                }
-                case AIController controller -> this.aiController = controller;
-                case RenderComponent rc -> this.renderComponent = rc;
-                default -> {
-                }
+            if (component instanceof Collider c) {
+                this.colliders.add(c);
+                if (primaryCollider == null) primaryCollider = c;
+            } else if (component instanceof AIController controller) {
+                this.aiController = controller;
+            } else if (component instanceof RenderComponent rc) {
+                this.renderComponent = rc;
             }
 
             component.onCreate();
