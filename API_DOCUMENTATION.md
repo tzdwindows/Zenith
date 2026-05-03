@@ -1,6 +1,6 @@
 # Zenith 引擎 API 文档
 
-##  目录
+## 目录
 
 - [核心引擎](#核心引擎)
 - [渲染系统](#渲染系统)
@@ -10,6 +10,8 @@
 - [事件系统](#事件系统)
 - [脚本系统](#脚本系统)
 - [资源管理](#资源管理)
+- [动画系统](#动画系统)
+- [光线追踪系统](#光线追踪系统)
 
 ---
 
@@ -1395,7 +1397,456 @@ public boolean intersects(Rectf other)
 
 ---
 
-## 高级特性
+## 动画系统
+
+### AnimatedModel
+**位置**: `com.zenith.animation.data.AnimatedModel`
+
+动画模型类，包含骨骼动画所需的所有数据。
+
+#### 核心功能
+- 存储网格数据和纹理信息
+- 管理多个动画剪辑
+- 提供骨骼层次结构
+- 支持glTF格式加载
+
+#### 关键方法
+```java
+// 获取所有动画
+public Map<String, AnimationClip> getAllAnimations()
+
+// 获取指定名称的动画
+public AnimationClip getAnimation(String name)
+
+// 获取网格数据
+public Mesh getMesh()
+
+// 获取纹理列表
+public List<Texture> getTextures()
+```
+
+---
+
+### Animator
+**位置**: `com.zenith.animation.runtime.Animator`
+
+动画控制器，负责播放和管理动画状态。
+
+#### 构造函数
+```java
+public Animator(AnimatedModel model)
+```
+
+#### 核心方法
+```java
+// 播放动画
+public void play(AnimationClip animation)
+
+// 设置循环播放
+public void setLooping(boolean looping)
+
+// 更新动画状态
+public void update(float deltaTime)
+
+// 绑定动画数据到着色器
+public void bind(int unit)
+```
+
+---
+
+### AnimationClip
+**位置**: `com.zenith.animation.runtime.AnimationClip`
+
+动画剪辑类，表示一段完整的动画序列。
+
+#### 核心功能
+- 存储关键帧数据
+- 管理动画时长和帧率
+- 支持多关节轨道
+
+#### 关键方法
+```java
+// 获取动画时长
+public float getDuration()
+
+// 获取所有关节轨道
+public Map<String, JointTrack> getTracks()
+
+// 采样特定时间点的姿态
+public void sample(float time, Skeleton pose)
+```
+
+---
+
+### AssimpModelLoader
+**位置**: `com.zenith.animation.io.AssimpModelLoader`
+
+基于Assimp的模型加载器，支持多种3D格式。
+
+#### 核心方法
+```java
+// 从文件加载动画模型
+public static AnimatedModel load(String path)
+
+// 支持的格式: glTF, GLB, FBX, OBJ等
+```
+
+---
+
+### Skeleton
+**位置**: `com.zenith.animation.runtime.Skeleton`
+
+骨骼系统类，管理角色的骨骼层次结构。
+
+#### 核心功能
+- 存储骨骼变换矩阵
+- 管理父子骨骼关系
+- 提供蒙皮计算支持
+
+#### 关键方法
+```java
+// 获取骨骼数量
+public int getBoneCount()
+
+// 获取特定骨骼的变换
+public Matrix4f getBoneTransform(int index)
+
+// 更新骨骼姿态
+public void updatePose(Map<String, Matrix4f> boneTransforms)
+```
+
+---
+
+### Keyframes
+**位置**: `com.zenith.animation.runtime.Keyframes`
+
+关键帧数据类，存储动画的关键帧信息。
+
+#### 核心功能
+- 存储位置、旋转、缩放的关键帧
+- 支持时间戳和插值计算
+- 提供动画采样功能
+
+#### 关键方法
+```java
+// 添加关键帧
+public void addKeyframe(float time, Vector3f position, Quaternionf rotation, Vector3f scale)
+
+// 采样特定时间点的变换
+public void sample(float time, Transform output)
+```
+
+---
+
+## 光线追踪系统
+
+### RayTracingProvider
+**位置**: `com.zenith.core.RayTracingProvider`
+
+光线追踪提供者接口，定义了光线追踪引擎的核心契约。
+
+#### 接口定义
+```java
+public interface RayTracingProvider {
+    // 初始化光线追踪器
+    void init(int width, int height);
+    
+    // 构建加速结构（BVH）
+    void buildAccelerationStructures(List<Mesh> meshes);
+    
+    // 执行光线追踪渲染
+    void trace(SceneFramebuffer fbo, Camera camera);
+    
+    // 释放资源
+    void dispose();
+}
+```
+
+---
+
+### SoftwarePathTracerProvider
+**位置**: `com.zenith.render.backend.opengl.SoftwarePathTracerProvider`
+
+基于GPU计算着色器的软件路径追踪器实现，支持CPU端BVH构建和GPU端光线追踪。
+
+#### 核心功能
+- **CPU端BVH构建**: 使用中值分割算法构建包围盒层次结构
+- **GPU路径追踪**: 使用OpenGL计算着色器执行并行光线追踪
+- **混合渲染模式**: 支持纯光追和光栅化+RT反射/阴影混合模式
+- **材质系统**: 支持漫反射、电介质（如水面）等多种材质
+- **物理天空**: 内置物理天空模型和太阳光源
+- **渐进式采样**: 支持多帧累积采样以提高图像质量
+
+#### 关键方法
+```java
+// 初始化路径追踪器
+@Override
+public void init(int width, int height)
+
+// 构建加速结构
+@Override
+public void buildAccelerationStructures(List<Mesh> meshes)
+
+// 执行光线追踪
+@Override
+public void trace(SceneFramebuffer fbo, Camera camera)
+
+// 重置累积采样计数
+public void resetAccumulation()
+
+// 获取当前采样数
+public int getSampleCount()
+
+// 设置网格材质ID（用于区分不同材质）
+public void setMeshMaterialId(Mesh mesh, int materialId)
+
+// 设置反照率纹理ID（用于路径追踪中的纹理采样）
+public void setAlbedoTextureId(int textureId)
+```
+
+#### 材质ID说明
+- `0`: 默认漫反射材质
+- `1`: 电介质材质（如水面、玻璃）
+- 其他值可根据需要扩展
+
+---
+
+### RayTracingConfig
+**位置**: `com.zenith.common.config.RayTracingConfig`
+
+光线追踪配置类，控制全局光追行为。
+
+#### 配置选项
+```java
+// 是否启用光线追踪
+public static boolean ENABLE_RAY_TRACING = true;
+
+// 光追模式：
+// 0 - 纯光线追踪模式
+// 1 - 混合渲染模式（光栅化 + RT反射/阴影）
+public static int RT_MODE = 1;
+
+// 是否每帧更新加速结构（针对动态物体）
+public static boolean DYNAMIC_AS_UPDATE = true;
+
+// 光追采样次数
+public static int RAY_SAMPLES = 1;
+```
+
+---
+
+### ZenithEngine 光线追踪API
+**位置**: `com.zenith.core.ZenithEngine`
+
+引擎核心类提供的光线追踪管理方法。
+
+#### 核心方法
+```java
+// 设置光线追踪提供者并初始化
+public void setRtProvider(RayTracingProvider provider)
+
+// 添加参与光追计算的网格
+public void addRtMesh(Mesh mesh)
+
+// 清除所有光追几何体
+public void clearRtMeshes()
+
+// 获取光追网格列表
+protected List<Mesh> rtMeshes
+```
+
+#### 使用流程
+```java
+// 1. 创建光追提供者
+SoftwarePathTracerProvider rtProvider = new SoftwarePathTracerProvider();
+
+// 2. 设置提供者（自动初始化）
+setRtProvider(rtProvider);
+
+// 3. 注册光追网格
+List<Mesh> meshes = new ArrayList<>();
+meshes.add(groundMesh);
+meshes.add(waterMesh);
+meshes.add(model.getMesh());
+
+clearRtMeshes();
+for (var m : meshes) {
+    addRtMesh(m);
+}
+
+// 4. 设置材质ID
+rtProvider.setMeshMaterialId(waterMesh, 1);  // 水面材质
+rtProvider.setMeshMaterialId(groundMesh, 0); // 地面材质
+rtProvider.setMeshMaterialId(model.getMesh(), 0);
+
+// 5. 设置纹理（可选）
+if (model.getTextures() != null && !model.getTextures().isEmpty()) {
+    rtProvider.setAlbedoTextureId(model.getTextures().get(0).getId());
+}
+
+// 6. 构建加速结构
+rtProvider.buildAccelerationStructures(rtMeshes);
+```
+
+---
+
+### BVHBuilder（内部类）
+**位置**: `com.zenith.render.backend.opengl.SoftwarePathTracerProvider.BVHBuilder`
+
+BVH（Bounding Volume Hierarchy）构建器，使用中值分割算法。
+
+#### 核心特性
+- **中值分割**: 基于质心位置的中值分割策略
+- **确定性构建**: 快速且可预测的构建时间
+- **三角形重排序**: 优化内存布局以提高缓存命中率
+- **紧凑存储**: 每个节点8个浮点数（min/max/leftFirst/triCount）
+
+#### BVH节点格式
+```java
+// 每个节点占用8个float
+data[offset]     = min.x;       // AABB最小值 X
+data[offset + 1] = min.y;       // AABB最小值 Y
+data[offset + 2] = min.z;       // AABB最小值 Z
+data[offset + 3] = leftFirst;   // 左子节点索引或三角形起始索引
+data[offset + 4] = max.x;       // AABB最大值 X
+data[offset + 5] = max.y;       // AABB最大值 Y
+data[offset + 6] = max.z;       // AABB最大值 Z
+data[offset + 7] = triCount;    // 三角形数量（0表示内部节点）
+```
+
+---
+
+### 光线追踪着色器
+**位置**: `resources/shaders/rt/pathtrace.comp`
+
+GPU计算着色器，执行路径追踪算法。
+
+#### Uniform变量
+```glsl
+// 相机参数
+uniform mat4 u_InvViewProj;      // 逆视图投影矩阵
+uniform vec3 u_CamPos;           // 相机位置
+uniform vec3 u_CamForward;       // 相机前向向量
+uniform vec3 u_CamRight;         // 相机右向量
+uniform vec3 u_CamUp;            // 相机上向量
+
+// 光照参数
+uniform vec3 u_SunDirection;     // 太阳方向
+uniform vec3 u_SunColor;         // 太阳颜色
+uniform float u_SunRadius;       // 太阳半径
+
+// 渲染参数
+uniform int u_MaxBounces;        // 最大反弹次数
+uniform float u_Aperture;        // 光圈大小（景深效果）
+uniform float u_FocalDist;       // 焦距
+uniform int u_RTMode;            // 光追模式
+
+// 数据结构
+uniform int u_VertexCount;       // 顶点数量
+uniform int u_BvhNodeCount;      // BVH节点数量
+uniform int u_SampleCount;       // 当前采样数
+
+// 纹理
+uniform sampler2D u_BaseColor;   // 光栅化基础颜色
+uniform sampler2D u_AlbedoTex;   // 反照率纹理
+uniform int u_HasAlbedoTex;      // 是否有反照率纹理
+
+// SSBO
+layout(std430, binding=2) buffer VertexBuffer { float vertices[]; };
+layout(std430, binding=3) buffer BvhBuffer { float bvhNodes[]; };
+
+// 输出
+layout(rgba16f, binding=0) uniform image2D u_OutputImage;
+```
+
+#### 安全模式
+```java
+// 启用安全模式（跳过BVH/SSBO读取，用于调试）
+System.setProperty("zenith.rt.safeMode", "1");
+```
+
+---
+
+### 使用示例
+
+#### 基本光线追踪场景
+```java
+public class RayTracingTest extends ZenithEngine {
+    private GLMesh groundMesh;
+    private SoftwarePathTracerProvider rtProvider;
+    
+    @Override
+    protected void init() {
+        // 配置光追模式
+        RayTracingConfig.ENABLE_RAY_TRACING = true;
+        RayTracingConfig.RT_MODE = 0;  // 纯光追模式
+        
+        // 创建光追提供者
+        rtProvider = new SoftwarePathTracerProvider();
+        setRtProvider(rtProvider);
+        
+        // 创建地面网格
+        VertexLayout layout = new VertexLayout();
+        layout.pushFloat("aPos", 3);
+        layout.pushFloat("aNormal", 3);
+        layout.pushFloat("aTexCoord", 2);
+        layout.pushFloat("aColor", 4);
+        
+        groundMesh = new GLMesh(6, layout);
+        groundMesh.updateVertices(createPlane(60.0f, 60.0f, 0.0f));
+        
+        // 注册光追网格
+        clearRtMeshes();
+        addRtMesh(groundMesh);
+        
+        // 设置材质
+        rtProvider.setMeshMaterialId(groundMesh, 0);
+        
+        // 构建BVH
+        rtProvider.buildAccelerationStructures(rtMeshes);
+    }
+    
+    @Override
+    protected void renderScene() {
+        // 纯光追模式下不需要渲染场景
+    }
+}
+```
+
+#### 混合渲染模式
+```java
+// 启用混合模式：光栅化 + RT反射/阴影
+RayTracingConfig.RT_MODE = 1;
+
+// 正常渲染3D场景
+@Override
+protected void renderScene() {
+    // 使用传统光栅化渲染
+    renderer.submit(mesh, material, transform);
+    renderer.flush();
+}
+
+// 光追效果会自动应用到场景中
+```
+
+#### 动态场景更新
+```java
+// 对于动态场景，每帧更新加速结构
+RayTracingConfig.DYNAMIC_AS_UPDATE = true;
+
+// 或者手动重建
+@Override
+protected void update(float deltaTime) {
+    if (objectMoved) {
+        rtProvider.buildAccelerationStructures(rtMeshes);
+        rtProvider.resetAccumulation();  // 重置采样
+    }
+}
+```
+
+---
+
+---
 
 ### HTMLLogger
 **位置**: `com.zenith.common.utils.HTMLLogger`
@@ -1645,6 +2096,102 @@ log("Hello from JavaScript!");
 let vec = new Vector3(1.0, 2.0, 3.0);
 ```
 
+### Q: 如何加载和播放动画？
+```java
+// 加载动画模型
+AnimatedModel model = AssimpModelLoader.load("models/character.gltf");
+Animator animator = new Animator(model);
+
+// 播放动画
+if (!model.getAllAnimations().isEmpty()) {
+    String animName = model.getAllAnimations().keySet().iterator().next();
+    AnimationClip clip = model.getAnimation(animName);
+    animator.play(clip);
+    animator.setLooping(true);
+}
+
+// 在更新循环中
+@Override
+protected void update(float deltaTime) {
+    if (animator != null) {
+        animator.update(deltaTime);
+    }
+}
+
+// 渲染时绑定动画数据
+shader.bind();
+animator.bind(0); // 绑定到纹理单元0
+model.getMesh().render();
+```
+
+### Q: 如何使用光线追踪功能？
+```java
+// 1. 配置光追模式
+RayTracingConfig.ENABLE_RAY_TRACING = true;
+RayTracingConfig.RT_MODE = 0;  // 0=纯光追, 1=混合模式
+
+// 2. 创建光追提供者
+SoftwarePathTracerProvider rtProvider = new SoftwarePathTracerProvider();
+setRtProvider(rtProvider);
+
+// 3. 注册网格
+GLMesh ground = createGroundMesh();
+clearRtMeshes();
+addRtMesh(ground);
+
+// 4. 设置材质（0=漫反射, 1=电介质）
+rtProvider.setMeshMaterialId(ground, 0);
+
+// 5. 构建BVH
+rtProvider.buildAccelerationStructures(rtMeshes);
+
+// 6. 纯光追模式下，renderScene()保持空即可
+```
+
+### Q: 如何实现水面效果？
+```java
+// 创建水面网格
+GLMesh waterMesh = new GLMesh(6, layout);
+waterMesh.updateVertices(createPlane(60.0f, 60.0f, 0.15f));
+
+// 设置为电介质材质（ID=1）
+rtProvider.setMeshMaterialId(waterMesh, 1);
+
+// 水面会自动在路径追踪器中表现为反射/折射效果
+```
+
+### Q: 如何提高光线追踪图像质量？
+```java
+// 方法1: 增加采样次数（自动累积）
+// 引擎会自动累积多帧采样，静止场景会逐渐清晰
+
+// 方法2: 调整相机参数
+computeShader.setUniform("u_Aperture", 0.00f);   // 光圈大小（景深）
+computeShader.setUniform("u_FocalDist", 60.0f);  // 焦距
+computeShader.setUniform("u_MaxBounces", 4);     // 增加反弹次数
+
+// 方法3: 优化光源
+computeShader.setUniform("u_SunColor", new Vector3f(15.0f, 13.0f, 10.0f));
+computeShader.setUniform("u_SunRadius", 0.03f);  // 太阳半径影响软阴影
+```
+
+### Q: 如何处理动态场景？
+```java
+// 方法1: 启用自动更新
+RayTracingConfig.DYNAMIC_AS_UPDATE = true;
+
+// 方法2: 手动重建BVH
+@Override
+protected void update(float deltaTime) {
+    if (objectMoved) {
+        rtProvider.buildAccelerationStructures(rtMeshes);
+        rtProvider.resetAccumulation();  // 重要：重置采样
+    }
+}
+
+// 注意：动态场景会显著降低性能，建议仅在必要时更新
+```
+
 ---
 
 ## 性能优化建议
@@ -1656,18 +2203,34 @@ let vec = new Vector3(1.0, 2.0, 3.0);
 5. **LOD系统**: 为远距离物体使用低精度模型
 6. **纹理压缩**: 使用压缩纹理格式减少显存占用
 7. **音频流式传输**: 大型音频文件使用流式加载
+8. **动画优化**: 
+   - 使用GPU蒙皮计算减轻CPU负担
+   - 合理设置动画更新频率
+   - 对远处角色降低动画采样率
+   - 复用Animator实例避免重复创建
+9. **光线追踪优化**:
+   - **静态场景优先**: BVH重建成本高，尽量保持场景静态
+   - **渐进式采样**: 利用多帧累积提高图像质量，避免单帧高采样
+   - **简化几何体**: 光追场景中减少不必要的三角形数量
+   - **合理使用混合模式**: RT_MODE=1可在性能和效果间取得平衡
+   - **限制反弹次数**: u_MaxBounces设置为1-4之间即可
+   - **安全模式调试**: 遇到崩溃时启用`zenith.rt.safeMode=1`排查问题
+   - **纹理优化**: 使用适当分辨率的反照率纹理，避免过大
 
 ---
 
 ## 版本信息
 
 - **引擎名称**: Zenith Engine
-- **渲染后端**: OpenGL
+- **渲染后端**: OpenGL 4.5+
 - **脚本引擎**: GraalJS (ECMAScript 2022)
 - **音频系统**: OpenAL
 - **Web集成**: JCEF (Java Chromium Embedded Framework)
 - **数学库**: JOML (Java OpenGL Math Library)
 - **窗口系统**: GLFW
+- **动画系统**: LWJGL Assimp
+- **物理引擎**: PhysX JNI
+- **光线追踪**: GPU计算着色器路径追踪（BVH加速）
 
 ---
 
@@ -1677,4 +2240,4 @@ let vec = new Vector3(1.0, 2.0, 3.0);
 
 ---
 
-*文档最后更新: 2026年5月*
+*文档最后更新: 2026年5月3日*
