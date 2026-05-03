@@ -31,6 +31,8 @@ public class RayTracingRealityTest extends ZenithEngine {
     private final Transform modelTransform = new Transform();
 
     private SoftwarePathTracerProvider softwareRT;
+    private org.joml.Vector3f lastCamPos = new org.joml.Vector3f();
+    private org.joml.Vector3f lastCamForward = new org.joml.Vector3f();
 
     public RayTracingRealityTest() {
         super(new GLWindow("Zenith Engine - Software Ray Tracing Reality Test", 1280, 720));
@@ -104,7 +106,24 @@ public class RayTracingRealityTest extends ZenithEngine {
 
     @Override
     protected void update(float deltaTime) {
-        // no-op: camera is driven by ZenithEngine input when cursor is locked.
+        // 获取相机
+        com.zenith.render.Camera camera = getCamera();
+        org.joml.Vector3f currentPos = camera.getTransform().getPosition();
+        org.joml.Vector3f currentForward = camera.getForward();
+
+        // 检查相机是否发生了移动或旋转
+        boolean moved = currentPos.distanceSquared(lastCamPos) > 0.0001f;
+        boolean rotated = currentForward.distanceSquared(lastCamForward) > 0.0001f;
+
+        if (moved || rotated) {
+            // 【关键！】：只要相机动了，就强制重置光追画面的累积！
+            if (softwareRT != null) {
+                softwareRT.resetAccumulation();
+            }
+            // 更新记录
+            lastCamPos.set(currentPos);
+            lastCamForward.set(currentForward);
+        }
     }
 
     @Override

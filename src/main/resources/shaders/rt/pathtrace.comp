@@ -1,7 +1,6 @@
 #version 430 core
 
 #define PI 3.14159265359
-// Set to 1 to bypass BVH tracing for crash isolation.
 #ifndef ZENITH_RT_SAFE_MODE
 #define ZENITH_RT_SAFE_MODE 0
 #endif
@@ -13,9 +12,6 @@ struct Vertex {
     vec4 color;
 };
 
-// NOTE: SSBO data for BVH nodes is packed as 8 floats per node on CPU:
-// [min.x, min.y, min.z, leftFirst, max.x, max.y, max.z, triCount]
-// Using two vec4s matches this layout under std430 without padding surprises.
 struct BVHNode {
     vec4 aabbMin_leftFirst;
     vec4 aabbMax_triCount;
@@ -40,21 +36,18 @@ uniform int u_VertexCount;
 uniform int u_BvhNodeCount;
 uniform int u_HasAlbedoTex;
 
-// 电影级调节参数
 uniform int u_MaxBounces;
-uniform float u_Aperture;      // 光圈 (控制景深)
-uniform float u_FocalDist;     // 对焦距离
+uniform float u_Aperture;
+uniform float u_FocalDist;
 uniform vec3 u_SunDirection;
 uniform vec3 u_SunColor;
-uniform float u_SunRadius;     // 太阳半径 (控制软阴影)
-uniform int u_RTMode;          // 0=纯光追展示, 1=混合贴图
+uniform float u_SunRadius;
+uniform int u_RTMode;
 
-// ==========================================
-// 核心数学与随机数
-// ==========================================
 uint seed;
 int gBestVertBase = -1;
 vec2 gBestBary = vec2(0.0);
+
 uint pcg_hash(uint i) {
     uint state = i * 747796405u + 2891336453u;
     uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
@@ -67,9 +60,6 @@ vec2 randomDisk() {
     return vec2(r * cos(theta), r * sin(theta));
 }
 
-// ==========================================
-// 几何相交算法
-// ==========================================
 bool rayTriangleIntersect(vec3 v0, vec3 v1, vec3 v2, vec3 ro, vec3 rd, out float t, out vec2 bary) {
     vec3 e1 = v1 - v0; vec3 e2 = v2 - v0;
     vec3 p = cross(rd, e2); float det = dot(e1, p);
@@ -79,7 +69,7 @@ bool rayTriangleIntersect(vec3 v0, vec3 v1, vec3 v2, vec3 ro, vec3 rd, out float
     vec3 q = cross(s, e1); float v = dot(rd, q) * invDet;
     if (v < 0.0 || u + v > 1.0) return false;
     t = dot(e2, q) * invDet; bary = vec2(u, v);
-    return t > 0.0001;
+    return t > 0.0001; // 这里保持 0.0001 防止漏掉几何体
 }
 
 float rayAABBIntersect(vec3 ro, vec3 invRd, vec3 aabbMin, vec3 aabbMax) {
@@ -90,20 +80,22 @@ float rayAABBIntersect(vec3 ro, vec3 invRd, vec3 aabbMin, vec3 aabbMax) {
     return (tNear > tFar || tFar < 0.0) ? 1e30 : max(tNear, 0.0);
 }
 
+// 标准遍历 (32级栈，不溢出)
 bool traceScene(vec3 ro, vec3 rd, out float tNear, out vec3 hitNormal, out vec2 hitUV) {
     tNear = 1e20; bool hit = false; vec3 invRd = 1.0 / (rd + vec3(1e-8));
-    int stack[128]; int stackPtr = 0; stack[stackPtr++] = 0;
+    int stack[32]; int stackPtr = 0; stack[stackPtr++] = 0;
     int bestVertBase = -1; vec2 bestBary = vec2(0.0);
+
     while (stackPtr > 0) {
         int nodeIdx = stack[--stackPtr];
         if (nodeIdx < 0 || nodeIdx >= u_BvhNodeCount) continue;
         BVHNode node = bvhNodes[nodeIdx];
-        vec3 aabbMin = node.aabbMin_leftFirst.xyz;
-        vec3 aabbMax = node.aabbMax_triCount.xyz;
-        if (rayAABBIntersect(ro, invRd, aabbMin, aabbMax) >= tNear) continue;
+        if (rayAABBIntersect(ro, invRd, node.aabbMin_leftFirst.xyz, node.aabbMax_triCount.xyz) >= tNear) continue;
+
         int triCount = int(node.aabbMax_triCount.w + 0.5);
         int leftFirst = int(node.aabbMin_leftFirst.w + 0.5);
         if (leftFirst < 0) continue;
+
         if (triCount > 0) {
             if (leftFirst >= (u_VertexCount / 3)) continue;
             for (int i = 0; i < triCount; i++) {
@@ -117,18 +109,14 @@ bool traceScene(vec3 ro, vec3 rd, out float tNear, out vec3 hitNormal, out vec2 
         } else {
             int c1 = leftFirst, c2 = leftFirst + 1;
             if (c1 < 0 || c2 < 0 || c1 >= u_BvhNodeCount || c2 >= u_BvhNodeCount) continue;
-            vec3 c1Min = bvhNodes[c1].aabbMin_leftFirst.xyz;
-            vec3 c1Max = bvhNodes[c1].aabbMax_triCount.xyz;
-            vec3 c2Min = bvhNodes[c2].aabbMin_leftFirst.xyz;
-            vec3 c2Max = bvhNodes[c2].aabbMax_triCount.xyz;
-            float d1 = rayAABBIntersect(ro, invRd, c1Min, c1Max);
-            float d2 = rayAABBIntersect(ro, invRd, c2Min, c2Max);
+            float d1 = rayAABBIntersect(ro, invRd, bvhNodes[c1].aabbMin_leftFirst.xyz, bvhNodes[c1].aabbMax_triCount.xyz);
+            float d2 = rayAABBIntersect(ro, invRd, bvhNodes[c2].aabbMin_leftFirst.xyz, bvhNodes[c2].aabbMax_triCount.xyz);
             if (d1 > d2) {
-                if (d1 < tNear && stackPtr < 128) stack[stackPtr++] = c1;
-                if (d2 < tNear && stackPtr < 128) stack[stackPtr++] = c2;
+                if (d1 < tNear && stackPtr < 32) stack[stackPtr++] = c1;
+                if (d2 < tNear && stackPtr < 32) stack[stackPtr++] = c2;
             } else {
-                if (d2 < tNear && stackPtr < 128) stack[stackPtr++] = c2;
-                if (d1 < tNear && stackPtr < 128) stack[stackPtr++] = c1;
+                if (d2 < tNear && stackPtr < 32) stack[stackPtr++] = c2;
+                if (d1 < tNear && stackPtr < 32) stack[stackPtr++] = c1;
             }
         }
     }
@@ -136,39 +124,68 @@ bool traceScene(vec3 ro, vec3 rd, out float tNear, out vec3 hitNormal, out vec2 
         float w = 1.0 - bestBary.x - bestBary.y;
         hitNormal = normalize(vertices[bestVertBase].normal.xyz * w + vertices[bestVertBase+1].normal.xyz * bestBary.x + vertices[bestVertBase+2].normal.xyz * bestBary.y);
         hitUV = vertices[bestVertBase].texCoord.xy * w + vertices[bestVertBase+1].texCoord.xy * bestBary.x + vertices[bestVertBase+2].texCoord.xy * bestBary.y;
-        gBestVertBase = bestVertBase;
-        gBestBary = bestBary;
+        gBestVertBase = bestVertBase; gBestBary = bestBary;
     }
     return hit;
 }
 
+// 极速阴影检测
+bool traceShadow(vec3 ro, vec3 rd, float maxDist) {
+    vec3 invRd = 1.0 / (rd + vec3(1e-8));
+    int stack[32]; int stackPtr = 0; stack[stackPtr++] = 0;
+    while (stackPtr > 0) {
+        int nodeIdx = stack[--stackPtr];
+        if (nodeIdx < 0 || nodeIdx >= u_BvhNodeCount) continue;
+        BVHNode node = bvhNodes[nodeIdx];
+        if (rayAABBIntersect(ro, invRd, node.aabbMin_leftFirst.xyz, node.aabbMax_triCount.xyz) >= maxDist) continue;
+
+        int triCount = int(node.aabbMax_triCount.w + 0.5);
+        int leftFirst = int(node.aabbMin_leftFirst.w + 0.5);
+        if (leftFirst < 0) continue;
+
+        if (triCount > 0) {
+            if (leftFirst >= (u_VertexCount / 3)) continue;
+            for (int i = 0; i < triCount; i++) {
+                int vertBase = (leftFirst + i) * 3;
+                if (vertBase + 2 >= u_VertexCount) continue;
+                float t; vec2 bary;
+                if (rayTriangleIntersect(vertices[vertBase].position.xyz, vertices[vertBase+1].position.xyz, vertices[vertBase+2].position.xyz, ro, rd, t, bary)) {
+                    // 修改了这里的硬判断阈值，配合外部强大的 Bias 彻底解决噪点
+                    if (t > 0.0001 && t < maxDist) return true;
+                }
+            }
+        } else {
+            int c1 = leftFirst, c2 = leftFirst + 1;
+            if (c1 < 0 || c2 < 0 || c1 >= u_BvhNodeCount || c2 >= u_BvhNodeCount) continue;
+            float d1 = rayAABBIntersect(ro, invRd, bvhNodes[c1].aabbMin_leftFirst.xyz, bvhNodes[c1].aabbMax_triCount.xyz);
+            float d2 = rayAABBIntersect(ro, invRd, bvhNodes[c2].aabbMin_leftFirst.xyz, bvhNodes[c2].aabbMax_triCount.xyz);
+            if (d1 > d2) {
+                if (d1 < maxDist && stackPtr < 32) stack[stackPtr++] = c1;
+                if (d2 < maxDist && stackPtr < 32) stack[stackPtr++] = c2;
+            } else {
+                if (d2 < maxDist && stackPtr < 32) stack[stackPtr++] = c2;
+                if (d1 < maxDist && stackPtr < 32) stack[stackPtr++] = c1;
+            }
+        }
+    }
+    return false;
+}
+
 float getMaterialId(int bestVertBase, vec2 bary) {
     float w = 1.0 - bary.x - bary.y;
-    return vertices[bestVertBase].texCoord.z * w
-        + vertices[bestVertBase + 1].texCoord.z * bary.x
-        + vertices[bestVertBase + 2].texCoord.z * bary.y;
+    return vertices[bestVertBase].texCoord.z * w + vertices[bestVertBase + 1].texCoord.z * bary.x + vertices[bestVertBase + 2].texCoord.z * bary.y;
 }
-
 vec3 getVertexColor(int bestVertBase, vec2 bary) {
     float w = 1.0 - bary.x - bary.y;
-    return vertices[bestVertBase].color.rgb * w
-        + vertices[bestVertBase + 1].color.rgb * bary.x
-        + vertices[bestVertBase + 2].color.rgb * bary.y;
+    return vertices[bestVertBase].color.rgb * w + vertices[bestVertBase + 1].color.rgb * bary.x + vertices[bestVertBase + 2].color.rgb * bary.y;
 }
-
 vec3 sampleAlbedo(vec2 uv, vec3 vtxColor) {
-    if (u_HasAlbedoTex == 1) {
-        return texture(u_AlbedoTex, uv).rgb;
-    }
+    if (u_HasAlbedoTex == 1) return texture(u_AlbedoTex, uv).rgb;
     return vtxColor;
 }
 
-// ==========================================
-// PBR 与 物理系统
-// ==========================================
 vec3 evaluatePhysicalSky(vec3 rd) {
-    vec3 L = normalize(u_SunDirection);
-    float cosTheta = dot(rd, L);
+    vec3 L = normalize(u_SunDirection); float cosTheta = dot(rd, L);
     vec3 skyHorizon = vec3(0.5, 0.6, 0.75); vec3 skyZenith = vec3(0.05, 0.15, 0.4);
     vec3 skyColor = mix(skyHorizon, skyZenith, clamp(rd.y, 0.0, 1.0));
     float sunDisk = smoothstep(0.9990, 0.9999, cosTheta);
@@ -188,39 +205,33 @@ vec3 importanceSampleGGX(vec2 Xi, vec3 N, float roughness) {
 }
 
 vec3 cosineSampleHemisphere(vec3 N) {
-    vec2 Xi = vec2(rand(), rand());
-    float r = sqrt(Xi.x); float theta = 2.0 * PI * Xi.y;
+    vec2 Xi = vec2(rand(), rand()); float r = sqrt(Xi.x); float theta = 2.0 * PI * Xi.y;
     vec3 H = vec3(r * cos(theta), r * sin(theta), sqrt(max(0.0, 1.0 - Xi.x)));
     vec3 up = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
     vec3 tangent = normalize(cross(up, N)); vec3 bitangent = cross(N, tangent);
     return normalize(tangent * H.x + bitangent * H.y + N * H.z);
 }
 
-// ==========================================
-// 主着色器程序
-// ==========================================
 void main() {
     ivec2 pixelCoords = ivec2(gl_GlobalInvocationID.xy);
     ivec2 res = imageSize(imgOutput);
     if (pixelCoords.x >= res.x || pixelCoords.y >= res.y) return;
 
-#if ZENITH_RT_SAFE_MODE == 1
-    // Crash isolation: just write sky gradient without any SSBO reads.
+    #if ZENITH_RT_SAFE_MODE == 1
     vec2 uv = (vec2(pixelCoords) + 0.5) / vec2(res);
     vec3 c = mix(vec3(0.55, 0.70, 0.95), vec3(0.95, 0.95, 1.0), uv.y);
     imageStore(imgOutput, pixelCoords, vec4(c, 1.0));
     return;
-#endif
+    #endif
+
     if (u_VertexCount <= 0 || u_BvhNodeCount <= 0) {
         imageStore(imgOutput, pixelCoords, vec4(0.0, 0.0, 0.0, 1.0));
         return;
     }
 
-    // 提取光栅化生成的带有贴图的原始画面
     vec4 screenColor = texelFetch(u_BaseColor, pixelCoords, 0);
     seed = pcg_hash(uint(pixelCoords.x) * 1973u + uint(pixelCoords.y) * 9277u + uint(u_SampleCount) * 26699u);
 
-    // 生成抗锯齿与景深相机射线
     vec2 jitter = vec2(rand(), rand()) - 0.5;
     vec2 ndc = (vec2(pixelCoords) + 0.5 + jitter) / vec2(res) * 2.0 - 1.0;
     vec4 target = u_InvViewProj * vec4(ndc.x, ndc.y, -1.0, 1.0);
@@ -236,36 +247,27 @@ void main() {
 
     vec3 finalColor = vec3(0.0);
 
-    // ==============================================================
-    // 模式 A：混合模式 (完美保留草地贴图，仅叠加光追软阴影与景深)
-    // ==============================================================
+    // ================== 模式 A ==================
     if (u_RTMode == 1) {
         float tNear; vec3 normal; vec2 uv;
-
-        // 射线撞击检测
         if (traceScene(rayOrigin, rayDir, tNear, normal, uv)) {
             vec3 hitPos = rayOrigin + rayDir * tNear;
-            if (dot(normal, rayDir) > 0.0) normal = -normal;
-            rayOrigin = hitPos + normal * max(0.001, tNear * 0.00005);
+            // 确保法线永远朝向光线射来的方向
+            vec3 geomNormal = dot(normal, rayDir) > 0.0 ? -normal : normal;
 
-            // 采样物理太阳软阴影
             vec2 sunJitter = randomDisk() * u_SunRadius;
             vec3 lightDir = normalize(u_SunDirection + u_CamRight * sunJitter.x + u_CamUp * sunJitter.y);
+            float shadowMask = 1.0;
 
-            float shadowMask = 1.0; // 默认无阴影
-            float shadowT; vec3 sNorm; vec2 sUV;
-            if (traceScene(rayOrigin, lightDir, shadowT, sNorm, sUV)) {
-                shadowMask = 0.25; // 处于阴影中，压暗原有的贴图 (环境光遮蔽级别)
+            // 加入 0.005 的强效偏移，彻底干掉 Shadow Acne 噪点
+            if (traceShadow(hitPos + geomNormal * 0.005, lightDir, 1e20)) {
+                shadowMask = 0.25;
             }
-
-            // 完美结合：原始贴图颜色 * 阴影掩码 (绝对不双重曝光！)
             finalColor = screenColor.rgb * shadowMask;
         } else {
-            // 没撞到地形，返回光栅化画好的天空
             finalColor = screenColor.rgb;
         }
 
-        // TAA 图像时域累积
         if (u_SampleCount <= 1) {
             imageStore(imgOutput, pixelCoords, vec4(finalColor, 1.0));
         } else {
@@ -273,12 +275,10 @@ void main() {
             vec4 accColor = mix(oldColor, vec4(finalColor, 1.0), 1.0 / float(u_SampleCount));
             imageStore(imgOutput, pixelCoords, accColor);
         }
-        return; // 混合模式直接结束
+        return;
     }
 
-    // ==============================================================
-    // 模式 B：纯光追模式 (电影级路径追踪、GGX、多重GI反弹)
-    // ==============================================================
+    // ================== 模式 B ==================
     vec3 radiance = vec3(0.0);
     vec3 throughput = vec3(1.0);
     int maxBounces = max(2, u_MaxBounces);
@@ -292,13 +292,11 @@ void main() {
         }
 
         vec3 hitPos = rayOrigin + rayDir * tNear;
-        if (dot(normal, rayDir) > 0.0) normal = -normal;
-        rayOrigin = hitPos + normal * 0.001;
+        // 记录光线是否是从物体内部射出的 (修复水面的核心)
+        bool isInside = dot(normal, rayDir) > 0.0;
+        vec3 geomNormal = isInside ? -normal : normal;
 
-        // 生成程序化金属 PBR 地砖
-        // Material id is stored in texCoord.z (packed on CPU side).
         float materialId = getMaterialId(gBestVertBase, gBestBary);
-
         vec3 vtxColor = getVertexColor(gBestVertBase, gBestBary);
         vec3 albedo = sampleAlbedo(uv, vtxColor);
         albedo = pow(max(albedo, 0.0), vec3(2.2));
@@ -308,13 +306,14 @@ void main() {
         vec3 F0 = mix(vec3(0.04), albedo, metallic);
         vec3 V = normalize(-rayDir);
 
-        // 直接光照 (NEE)
         vec2 sunJitter = randomDisk() * u_SunRadius;
         vec3 lightDir = normalize(u_SunDirection + u_CamRight * sunJitter.x + u_CamUp * sunJitter.y);
-        float shadowT; vec3 sNorm; vec2 sUV;
-        if (!traceScene(rayOrigin, lightDir, shadowT, sNorm, sUV)) {
+
+        // --- 直接光照（阴影） ---
+        // 使用强效偏移量修复软阴影
+        if (!traceShadow(hitPos + geomNormal * 0.005, lightDir, 1e20)) {
             vec3 H = normalize(V + lightDir);
-            float NdotL = max(dot(normal, lightDir), 0.0);
+            float NdotL = max(dot(geomNormal, lightDir), 0.0);
             if (NdotL > 0.0) {
                 vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
                 vec3 kD = (1.0 - F) * (1.0 - metallic);
@@ -323,40 +322,44 @@ void main() {
             }
         }
 
-        // 间接反弹与轮盘赌
+        // --- 间接光照反弹（修复水面的关键） ---
         if (materialId > 0.5) {
             float ior = 1.333;
-            float cosi = clamp(dot(normal, V), 0.0, 1.0);
-            float eta = 1.0 / ior;
+            float cosi = clamp(dot(geomNormal, V), 0.0, 1.0);
+            // 物理修复：如果是从水里出来，折射率必须颠倒！
+            float eta = isInside ? ior : (1.0 / ior);
             float sin2t = eta * eta * (1.0 - cosi * cosi);
             float Fr = fresnelSchlick(cosi, vec3(0.02)).x;
             bool tir = sin2t > 1.0;
             float prob = tir ? 1.0 : Fr;
+
             if (rand() < prob) {
-                rayDir = reflect(-V, normal);
+                rayDir = reflect(-V, geomNormal);
+                // 反射：光线留在同一介质，向外推 0.005
+                rayOrigin = hitPos + geomNormal * 0.005;
                 throughput *= vec3(0.98) / max(prob, 1e-3);
             } else {
-                rayDir = refract(-V, normal, eta);
+                rayDir = refract(-V, geomNormal, eta);
+                // 折射：光线进入介质内部！向【内】推 0.005，彻底修复水面死循环！
+                rayOrigin = hitPos - geomNormal * 0.005;
                 throughput *= vec3(0.90, 0.96, 1.0) / max(1.0 - prob, 1e-3);
             }
         } else {
-            vec3 F_bounce = fresnelSchlick(max(dot(normal, V), 0.0), F0);
+            vec3 F_bounce = fresnelSchlick(max(dot(geomNormal, V), 0.0), F0);
             float probSpecular = clamp(max(F_bounce.x, max(F_bounce.y, F_bounce.z)), 0.1, 0.9);
-
             if (rand() < probSpecular) {
-                vec3 H = importanceSampleGGX(vec2(rand(), rand()), normal, roughness);
+                vec3 H = importanceSampleGGX(vec2(rand(), rand()), geomNormal, roughness);
                 rayDir = reflect(-V, H);
                 throughput *= F_bounce / probSpecular;
             } else {
-                rayDir = cosineSampleHemisphere(normal);
+                rayDir = cosineSampleHemisphere(geomNormal);
                 throughput *= albedo / (1.0 - probSpecular);
             }
+            // 漫反射/金属反射：光线留在外面，向外推 0.005
+            rayOrigin = hitPos + geomNormal * 0.005;
         }
 
-        if (dot(rayDir, normal) <= 0.0) {
-            break;
-        }
-
+        if (dot(rayDir, geomNormal) <= 0.0 && materialId < 0.5) break;
         if (bounce >= 2) {
             float p = max(throughput.x, max(throughput.y, throughput.z));
             if (rand() > p) break;
@@ -364,12 +367,10 @@ void main() {
         }
     }
 
-    // 纯光追模式下的 ACES 电影滤镜
     finalColor = radiance * 1.2;
     finalColor = (finalColor * (2.51 * finalColor + 0.03)) / (finalColor * (2.43 * finalColor + 0.59) + 0.14);
     finalColor = pow(finalColor, vec3(1.0 / 2.2));
 
-    // TAA 图像时域累积
     if (u_SampleCount <= 1) {
         imageStore(imgOutput, pixelCoords, vec4(finalColor, 1.0));
     } else {
