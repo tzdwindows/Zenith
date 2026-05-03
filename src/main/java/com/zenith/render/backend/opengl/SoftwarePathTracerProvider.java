@@ -132,7 +132,7 @@ public class SoftwarePathTracerProvider implements RayTracingProvider {
         computeShader.setUniform("u_CamRight", camera.getRight());
         computeShader.setUniform("u_CamUp", camera.getUp());
 
-        computeShader.setUniform("u_MaxBounces", 1);
+        computeShader.setUniform("u_MaxBounces", 3);
         computeShader.setUniform("u_Aperture", 0.00f);
         computeShader.setUniform("u_FocalDist", 60.0f);
 

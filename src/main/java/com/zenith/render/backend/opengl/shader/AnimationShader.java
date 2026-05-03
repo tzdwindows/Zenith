@@ -77,13 +77,29 @@ public class AnimationShader extends GLShader {
                 "    float metallic;\n" +
                 "};\n" +
 
-                // ⭐ 核心修复 1：先包含头文件。u_Lights 和 u_LightCount 已经在 lighting.glsl 中定义了。
-                // 绝对不要在这里手动写 uniform Light u_Lights[16]，否则会冲突。
                 "#include \"common_math.glsl\"\n" +
                 "#include \"brdf.glsl\"\n" +
                 "#include \"surface_shading.glsl\"\n" +
                 "#include \"lighting.glsl\"\n" +
                 "#include \"shading_indirect.glsl\"\n" +
+
+                // ⭐ 核心修复：定义 map 函数 (场景距离场)
+                // shadow.glsl 需要这个函数来知道光线碰到了什么
+                "float map(vec3 p) {\n" +
+                "    // 方案 A: 如果你有全局场景 SDF 文件，请在此包含：\n" +
+                "    // return scene_map(p);\n" +
+                "    \n" +
+                "    // 方案 B: 默认测试：假设在 y = -1.0 处有一个无限大的地面\n" +
+                "    float ground = p.y + 1.0;\n" +
+                "    \n" +
+                "    // 你也可以在这里添加简单的球体或其他几何体进行测试\n" +
+                "    // float sphere = length(p - vec3(0, 2, 0)) - 1.0;\n" +
+                "    // return min(ground, sphere);\n" +
+                "    \n" +
+                "    return ground;\n" +
+                "}\n" +
+
+                "#include \"shadow.glsl\"\n" +
 
                 "in vec2 vTexCoord;\n" +
                 "in vec3 vNormal;\n" +
@@ -95,7 +111,6 @@ public class AnimationShader extends GLShader {
                 "uniform vec4 u_BaseColor;\n" +
                 "uniform vec3 u_ViewPos;\n" +
                 "uniform float u_UseTexture;\n" +
-
                 "uniform float u_IsEmissive;\n" +
                 "uniform vec3 u_EmissiveColor;\n" +
                 "uniform float u_EmissiveIntensity;\n" +
@@ -119,16 +134,26 @@ public class AnimationShader extends GLShader {
                 "    pixel.roughness = roughness;\n" +
                 "    pixel.metallic = metallic;\n" +
 
+                "    // --- 光线追踪计算 ---\n" +
+                "    float shadow = 1.0;\n" +
+                "    if (u_LightCount > 0) {\n" +
+                "        // 获取主光源（假设是第一个方向光）\n" +
+                "        vec3 L = (u_Lights[0].type == 0) ? normalize(-u_Lights[0].direction) : normalize(u_Lights[0].position - vWorldPos);\n" +
+                "        // 只有向光面才进行昂贵的阴影追踪\n" +
+                "        if(dot(N, L) > 0.0) {\n" +
+                "            shadow = calculateSoftShadow(vWorldPos + N * 0.02, L, 0.01, 20.0, 32.0);\n" +
+                "        } else { shadow = 0.0; }\n" +
+                "    }\n" +
+                "    float ao = calculateAO(vWorldPos, N);\n" +
+
                 "    vec3 Lo = vec3(0.0);\n" +
-                "    // 如果你的系统支持 IBL\n" +
-                "    // Lo += evaluateIBL(pixel, N, V);\n" +
-                "    Lo += evaluateLights(pixel, N, V, vWorldPos);\n" +
+                "    Lo += evaluateLights(pixel, N, V, vWorldPos) * (shadow * 0.8 + 0.2);\n" + // 给一点环境底色
+                "    Lo *= ao;\n" +
 
                 "    if (u_IsEmissive > 0.5) {\n" +
                 "        Lo += u_EmissiveColor * u_EmissiveIntensity;\n" +
                 "    }\n" +
 
-                "    // ACES Tone Mapping\n" +
                 "    Lo = (Lo * (2.51 * Lo + 0.03)) / (Lo * (2.43 * Lo + 0.59) + 0.14);\n" +
                 "    FragColor = vec4(pow(max(Lo, 0.0), vec3(1.0/2.2)), texColor.a * u_BaseColor.a);\n" +
                 "}\n";
