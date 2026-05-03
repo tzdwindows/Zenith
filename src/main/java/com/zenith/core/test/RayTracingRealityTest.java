@@ -25,6 +25,7 @@ import static org.lwjgl.opengl.GL11.*;
  * - Ground & Model (in path tracer)
  * - Sea / water plane (Rasterized using WaterShader)
  */
+@Deprecated(since = "17")
 public class RayTracingRealityTest extends ZenithEngine {
 
     private GLMesh groundMesh;
@@ -32,6 +33,9 @@ public class RayTracingRealityTest extends ZenithEngine {
     private AnimatedModel model;
     private final Transform modelTransform = new Transform();
     private final Transform waterTransform = new Transform(); // 水面的Transform
+    private int lastRtMode = -1;
+    private int lastWidth = -1;
+    private int lastHeight = -1;
 
     private SoftwarePathTracerProvider softwareRT;
     private WaterShader waterShader; // 声明 WaterShader
@@ -97,8 +101,6 @@ public class RayTracingRealityTest extends ZenithEngine {
         clearRtMeshes();
         for (var m : meshes) addRtMesh(m);
 
-        addRtMesh(waterMesh); // 让光追知道水面的存在
-
         // 设置材质 ID (0=狐狸, 1=水面, 2=地面)
         softwareRT.setMeshMaterialId(model.getMesh(), 0);
         softwareRT.setMeshMaterialId(waterMesh, 1);
@@ -119,15 +121,23 @@ public class RayTracingRealityTest extends ZenithEngine {
         org.joml.Vector3f currentPos = camera.getTransform().getPosition();
         org.joml.Vector3f currentForward = camera.getForward();
 
-        boolean moved = currentPos.distanceSquared(lastCamPos) > 0.0001f;
-        boolean rotated = currentForward.distanceSquared(lastCamForward) > 0.0001f;
+        boolean moved = currentPos.distanceSquared(lastCamPos) > 0.000001f;
+        boolean rotated = currentForward.distanceSquared(lastCamForward) > 0.000001f;
 
-        if (moved || rotated) {
+        int w = window.getWidth();
+        int h = window.getHeight();
+        boolean resized = (w != lastWidth) || (h != lastHeight);
+        boolean modeChanged = RayTracingConfig.RT_MODE != lastRtMode;
+
+        if (moved || rotated || resized || modeChanged) {
             if (softwareRT != null) {
                 softwareRT.resetAccumulation();
             }
             lastCamPos.set(currentPos);
             lastCamForward.set(currentForward);
+            lastWidth = w;
+            lastHeight = h;
+            lastRtMode = RayTracingConfig.RT_MODE;
         }
     }
 

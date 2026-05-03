@@ -16,6 +16,7 @@ import static org.lwjgl.opengl.GL43.*;
  * 方案 B：屏幕空间混合光追 (Screen Space Ray Tracing / SSR / SSS)
  * 利用光栅化 G-Buffer (颜色与深度) 作为光线步进的加速结构。
  */
+@Deprecated(since = "17")
 public class HardwareHybridRTProvider implements RayTracingProvider {
     private GLComputeShader rtShader;
     private int sampleCount = 0;

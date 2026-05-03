@@ -26,6 +26,7 @@ import static org.lwjgl.opengl.GL43.*;
  * 1) This is used as "software ray tracing" in Zenith: geometry + BVH are built on CPU, tracing runs in compute.
  * 2) We pack extra per-vertex data (color + material id) to enable more realistic test scenes (water/model).
  */
+@Deprecated(since = "17")
 public class SoftwarePathTracerProvider implements RayTracingProvider {
 
     private GLComputeShader computeShader;

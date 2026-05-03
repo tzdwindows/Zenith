@@ -40,6 +40,7 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     protected final GLCamera camera;
     private boolean running;
     private float lastFrameTime;
+    @Deprecated(since = "17")
     protected RayTracingProvider rtProvider;
     protected final boolean[] keys = new boolean[1024];
     protected final boolean[] mouseButtons = new boolean[8];
@@ -594,6 +595,7 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     /**
      * 设置光线追踪提供者并初始化
      */
+    @Deprecated(since = "17")
     public void setRtProvider(RayTracingProvider provider) {
         if (this.rtProvider != null) {
             this.rtProvider.dispose();
