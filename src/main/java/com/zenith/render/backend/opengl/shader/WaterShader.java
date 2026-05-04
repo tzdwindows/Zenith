@@ -15,7 +15,6 @@ public class WaterShader extends GLShader {
                     "layout (location = 1) in vec3 aNormal;\n" +
                     "layout (location = 2) in vec2 aTexCoord;\n" +
                     "\n" +
-                    "// u_ViewProjection 已在 water.glsl 声明，此处移除以防止重定义冲突\n" +
                     "uniform mat4 u_Model;\n" +
                     "uniform float u_Time;\n" +
                     "\n" +
@@ -41,7 +40,7 @@ public class WaterShader extends GLShader {
                     "}";
 
     private static final String FRAGMENT_SRC =
-            "#version 330 core\n" +
+            "#version 450 core\n" +
                     "\n" +
                     "#include \"water.glsl\"\n" +
                     "#include \"lighting.glsl\"\n" +
@@ -62,61 +61,87 @@ public class WaterShader extends GLShader {
                     "uniform vec3 u_ShallowColor;\n" +
                     "uniform vec2 u_ScreenSize;\n" +
                     "\n" +
+                    "// ⭐ 新增：太阳参数同步\n" +
+                    "uniform vec3 u_SunDir;\n" +
+                    "uniform vec3 u_SunColor;\n" +
+                    "\n" +
+                    "// 物理天空模型 (与 AnimationShader 保持一致)\n" +
+                    "vec3 evaluateSkyReflection(vec3 rd) {\n" +
+                    "    vec3 L = normalize(u_SunDir);\n" +
+                    "    float sunHeight = smoothstep(-0.2, 0.2, L.y);\n" +
+                    "    vec3 skyHorizon = vec3(0.5, 0.6, 0.75);\n" +
+                    "    vec3 skyZenith = vec3(0.05, 0.15, 0.4);\n" +
+                    "    vec3 skyColor = mix(skyHorizon * 0.1, skyZenith, clamp(rd.y, 0.0, 1.0)) * sunHeight;\n" +
+                    "    float cosTheta = dot(rd, L);\n" +
+                    "    float sunDisk = smoothstep(0.9990, 0.9999, cosTheta) * sunHeight;\n" +
+                    "    return skyColor + u_SunColor * sunDisk;\n" +
+                    "}\n" +
+                    "\n" +
                     "void main() {\n" +
                     "    vec2 screenUV = gl_FragCoord.xy / u_ScreenSize;\n" +
                     "    vec3 V = normalize(u_ViewPos - vWorldPos);\n" +
-                    "    vec3 tangentNormal = vec3(0.0, 0.0, 1.0);\n" +
+                    "    \n" +
+                    "    // 计算太阳高度影响因子\n" +
+                    "    float sunFactor = smoothstep(-0.1, 0.2, normalize(u_SunDir).y);\n" +
                     "\n" +
+                    "    // 计算法线\n" +
+                    "    vec3 tangentNormal = vec3(0.0, 0.0, 1.0);\n" +
                     "    if (u_HasNormalMap == 1) {\n" +
-                    "        vec2 flow1 = vec2(0.015, 0.01) * u_Time;\n" +
-                    "        vec2 flow2 = vec2(-0.01, 0.015) * u_Time;\n" +
-                    "        vec3 n1 = texture(u_WaterNormalTex, vWorldPos.xz * u_NormalScale + flow1).rgb * 2.0 - 1.0;\n" +
-                    "        vec3 n2 = texture(u_WaterNormalTex, vWorldPos.xz * u_NormalScale * 1.5 + flow2).rgb * 2.0 - 1.0;\n" +
+                    "        vec2 flow = vec2(u_Time * 0.02);\n" +
+                    "        vec3 n1 = texture(u_WaterNormalTex, vWorldPos.xz * u_NormalScale + flow).rgb * 2.0 - 1.0;\n" +
+                    "        vec3 n2 = texture(u_WaterNormalTex, vWorldPos.xz * u_NormalScale * 1.5 - flow * 0.8).rgb * 2.0 - 1.0;\n" +
                     "        tangentNormal = normalize(vec3(n1.xy + n2.xy, n1.z * n2.z));\n" +
                     "        tangentNormal.xy *= u_NormalStrength;\n" +
                     "        tangentNormal = normalize(tangentNormal);\n" +
                     "    }\n" +
                     "    vec3 N = normalize(vTBN * tangentNormal);\n" +
-                    "    int lightCount = max(1, min(int(u_LightCount), 16));\n" +
                     "\n" +
-                    "    float dayFactor = 0.02;\n" +
-                    "    if (u_LightCount > 0) {\n" +
-                    "        dayFactor = clamp(u_Lights[0].intensity * 0.5, 0.02, 1.0);\n" +
-                    "    }\n" +
-                    "\n" +
+                    "    // 环境项计算\n" +
                     "    WaterMaterial mat;\n" +
-                    "    mat.deepColor = u_DeepColor * dayFactor;\n" +
-                    "    mat.shallowColor = u_ShallowColor * dayFactor;\n" +
-                    "    mat.foamColor = vec3(0.85) * dayFactor;\n" +
+                    "    // ⭐ 核心修复：水面颜色随太阳变暗\n" +
+                    "    mat.deepColor = u_DeepColor * (0.1 + 0.9 * sunFactor);\n" +
+                    "    mat.shallowColor = u_ShallowColor * (0.1 + 0.9 * sunFactor);\n" +
+                    "    mat.foamColor = vec3(0.95) * sunFactor;\n" +
                     "    mat.roughness = 0.05;\n" +
-                    "    mat.clarity = 1.0;\n" +
+                    "    mat.clarity = 0.3;\n" +
                     "    mat.rainIntensity = u_RainIntensity;\n" +
-                    "    mat.ambientWeight = 1.0 / float(lightCount);\n" +
-                    "    mat.dayFactor = dayFactor;\n" +
+                    "    mat.dayFactor = sunFactor;\n" +
                     "\n" +
-                    "    vec3 finalColor = vec3(0.0);\n" +
+                    "    // 获取基础环境色 (折射等)\n" +
+                    "    vec3 finalColor = calculateWaterEnvironment(vWorldPos, V, N, mat, screenUV);\n" +
+                    "    \n" +
+                    "    // ⭐ 核心修复：加入真实的物理天空反射\n" +
+                    "    vec3 R = reflect(-V, N);\n" +
+                    "    vec3 skyRef = evaluateSkyReflection(R);\n" +
+                    "    float fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(N, V), 0.0), 5.0);\n" +
+                    "    finalColor += skyRef * fresnel * 0.5;\n" +
+                    "\n" +
+                    "    // 累加直接光照 (太阳高光)\n" +
+                    "    int lightCount = max(0, min(int(u_LightCount), 16));\n" +
                     "    for (int i = 0; i < lightCount; i++) {\n" +
                     "        Light light = u_Lights[i];\n" +
-                    "        vec3 L; \n" +
-                    "        float attenuation = 1.0;\n" +
+                    "        vec3 L;\n" +
+                    "        float atten = 1.0;\n" +
                     "        if (light.type == 0) {\n" +
                     "            L = normalize(-light.direction);\n" +
                     "        } else {\n" +
-                    "            vec3 lightVec = light.position - vWorldPos;\n" +
-                    "            float dist = length(lightVec);\n" +
-                    "            L = normalize(lightVec);\n" +
-                    "            attenuation = calculateAttenuation(dist, light.range);\n" +
-                    "            if (light.type == 2) attenuation *= calculateSpotAttenuation(light, L);\n" +
+                    "            vec3 lVec = light.position - vWorldPos;\n" +
+                    "            float d = length(lVec);\n" +
+                    "            L = normalize(lVec);\n" +
+                    "            atten = calculateAttenuation(d, light.range);\n" +
                     "        }\n" +
-                    "        vec3 radiance = light.color.rgb * light.intensity * attenuation;\n" +
-                    "        finalColor += shadeWaterPBR(vWorldPos, V, L, N, radiance, mat, u_Time, screenUV);\n" +
+                    "        vec3 radiance = light.color.rgb * light.intensity * atten;\n" +
+                    "        finalColor += calculateWaterDirect(V, L, N, radiance, mat);\n" +
                     "    }\n" +
                     "\n" +
-                    "    if(isnan(finalColor.x) || isnan(finalColor.y) || isnan(finalColor.z)) finalColor = u_DeepColor * dayFactor;\n" +
+                    "    // Tone Mapping (ACES)\n" +
+                    "    finalColor = max(finalColor, 0.0);\n" +
                     "    finalColor = (finalColor * (2.51 * finalColor + 0.03)) / (finalColor * (2.43 * finalColor + 0.59) + 0.14);\n" +
+                    "    \n" +
                     "    float NoV_flat = clamp(dot(vec3(0.0, 1.0, 0.0), V), 0.0, 1.0);\n" +
-                    "    float alpha = mix(0.9, 1.0, pow(1.0 - NoV_flat, 4.0));\n" +
-                    "    FragColor = vec4(pow(max(finalColor, 0.0), vec3(1.0/2.2)), alpha);\n" +
+                    "    float alpha = mix(0.8, 1.0, pow(1.0 - NoV_flat, 3.0));\n" +
+                    "    \n" +
+                    "    FragColor = vec4(pow(finalColor, vec3(1.0/2.2)), alpha);\n" +
                     "}";
 
     public WaterShader() {
@@ -135,6 +160,13 @@ public class WaterShader extends GLShader {
     public void applyLights(LightManager lm, Vector3f viewPos) {
         this.bind();
         lm.apply(this, viewPos);
+    }
+
+    // ⭐ 新增：用于每帧同步太阳状态
+    public void setSun(Vector3f dir, Vector3f color) {
+        this.bind();
+        setUniform("u_SunDir", dir);
+        setUniform("u_SunColor", color);
     }
 
     public void bindWaterNormal(GLTexture normalTex) {

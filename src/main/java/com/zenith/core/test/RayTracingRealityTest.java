@@ -25,7 +25,6 @@ import static org.lwjgl.opengl.GL11.*;
  * - Ground & Model (in path tracer)
  * - Sea / water plane (Rasterized using WaterShader)
  */
-@Deprecated(since = "17")
 public class RayTracingRealityTest extends ZenithEngine {
 
     private GLMesh groundMesh;

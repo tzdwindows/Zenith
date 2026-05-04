@@ -595,7 +595,6 @@ public abstract class ZenithEngine implements Window.WindowEventListener {
     /**
      * 设置光线追踪提供者并初始化
      */
-    @Deprecated(since = "17")
     public void setRtProvider(RayTracingProvider provider) {
         if (this.rtProvider != null) {
             this.rtProvider.dispose();

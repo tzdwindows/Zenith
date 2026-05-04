@@ -20,71 +20,59 @@ public class ScreenShader extends GLShader {
 
     // 优化的片段着色器，支持多重效果叠加
     private static final String FRAGMENT_SOURCE =
-            "#version 330 core\n" +
+            "#version 450 core\n" +
                     "in vec2 vUV;\n" +
                     "out vec4 FragColor;\n" +
-                    "\n" +
                     "uniform sampler2D u_Texture;\n" +
-                    "\n" +
-                    "// RGB 分离参数\n" +
-                    "uniform float u_ChromaticOffset;\n" +
-                    "\n" +
-                    "// 模糊模式和采样数 (Java端没有int传参，统一使用float接收并内部转换)\n" +
-                    "uniform float u_BlurMode;\n" +
-                    "uniform float u_BlurSamples;\n" +
-                    "\n" +
-                    "// 动态模糊参数\n" +
-                    "uniform vec2 u_MotionDir;\n" +
-                    "\n" +
-                    "// 径向模糊参数\n" +
-                    "uniform float u_RadialStrength;\n" +
-                    "\n" +
-                    "// 暗角参数\n" +
-                    "uniform float u_VignetteStrength;\n" +
-                    "\n" +
-                    "// 基础采样函数（自带RGB分离）\n" +
-                    "vec4 sampleWithChromatic(vec2 uv) {\n" +
-                    "    float r = texture(u_Texture, uv + vec2(u_ChromaticOffset, 0.0)).r;\n" +
-                    "    float g = texture(u_Texture, uv).g;\n" +
-                    "    float b = texture(u_Texture, uv - vec2(u_ChromaticOffset, 0.0)).b;\n" +
-                    "    return vec4(r, g, b, 1.0);\n" +
+                    "uniform float u_Time;\n" +
+
+                    "// 3A 级后期参数\n" +
+                    "uniform float u_Exposure = 1.0;\n" +
+                    "uniform float u_Contrast = 1.1;\n" +
+                    "uniform float u_Saturation = 1.1;\n" +
+                    "uniform float u_VignetteStrength = 0.3;\n" +
+                    "uniform float u_ChromaticOffset = 0.0015;\n" +
+                    "uniform float u_Sharpness = 0.4; // 锐化\n" +
+                    "uniform float u_GrainAmount = 0.05; // 颗粒感\n" +
+
+                    "// 锐化采样\n" +
+                    "vec3 getSharpened(vec2 uv) {\n" +
+                    "    vec2 res = 1.0 / textureSize(u_Texture, 0);\n" +
+                    "    vec3 center = texture(u_Texture, uv).rgb;\n" +
+                    "    vec3 left   = texture(u_Texture, uv + vec2(-res.x, 0)).rgb;\n" +
+                    "    vec3 right  = texture(u_Texture, uv + vec2(res.x, 0)).rgb;\n" +
+                    "    vec3 up     = texture(u_Texture, uv + vec2(0, res.y)).rgb;\n" +
+                    "    vec3 down   = texture(u_Texture, uv + vec2(0, -res.y)).rgb;\n" +
+                    "    return center + u_Sharpness * (center * 4.0 - left - right - up - down);\n" +
                     "}\n" +
-                    "\n" +
+
+                    "// 伪随机函数用于产生颗粒\n" +
+                    "float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }\n" +
+
                     "void main() {\n" +
-                    "    vec4 finalColor = vec4(0.0);\n" +
-                    "    // 加上 0.1 防止浮点数精度带来的强制转换错误\n" +
-                    "    int mode = int(u_BlurMode + 0.1);\n" +
-                    "    int samples = int(u_BlurSamples + 0.1);\n" +
-                    "    \n" +
-                    "    if (mode == 1) { // 动态模糊 (Motion Blur)\n" +
-                    "        for(int i = 0; i < 30; i++) {\n" +
-                    "            if (i >= samples) break;\n" +
-                    "            vec2 offset = u_MotionDir * (float(i) / float(samples - 1) - 0.5);\n" +
-                    "            finalColor += sampleWithChromatic(vUV + offset);\n" +
-                    "        }\n" +
-                    "        finalColor /= float(samples);\n" +
-                    "    }\n" +
-                    "    else if (mode == 2) { // 径向模糊 (Radial Blur)\n" +
-                    "        vec2 dir = 0.5 - vUV;\n" +
-                    "        for(int i = 0; i < 30; i++) {\n" +
-                    "            if (i >= samples) break;\n" +
-                    "            float scale = 1.0 - u_RadialStrength * (float(i) / float(samples - 1));\n" +
-                    "            finalColor += sampleWithChromatic(vUV + dir * (1.0 - scale));\n" +
-                    "        }\n" +
-                    "        finalColor /= float(samples);\n" +
-                    "    }\n" +
-                    "    else { // 无模糊\n" +
-                    "        finalColor = sampleWithChromatic(vUV);\n" +
-                    "    }\n" +
-                    "\n" +
-                    "    // 暗角效果处理 (Vignette)\n" +
-                    "    if (u_VignetteStrength > 0.0) {\n" +
-                    "        float dist = distance(vUV, vec2(0.5));\n" +
-                    "        float vignette = smoothstep(0.8, 0.5 - u_VignetteStrength * 0.5, dist);\n" +
-                    "        finalColor.rgb *= vignette;\n" +
-                    "    }\n" +
-                    "\n" +
-                    "    FragColor = finalColor;\n" +
+                    "    // 1. 带色差的基础采样与锐化混合\n" +
+                    "    vec3 color;\n" +
+                    "    color.r = texture(u_Texture, vUV + vec2(u_ChromaticOffset, 0)).r;\n" +
+                    "    color.g = getSharpened(vUV).g;\n" +
+                    "    color.b = texture(u_Texture, vUV - vec2(u_ChromaticOffset, 0)).b;\n" +
+
+                    "    // 2. 曝光补偿\n" +
+                    "    color *= u_Exposure;\n" +
+
+                    "    // 3. 对比度与饱和度调整\n" +
+                    "    color = (color - 0.5) * u_Contrast + 0.5;\n" +
+                    "    float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));\n" +
+                    "    color = mix(vec3(luma), color, u_Saturation);\n" +
+
+                    "    // 4. 暗角效果\n" +
+                    "    float dist = distance(vUV, vec2(0.5));\n" +
+                    "    color *= smoothstep(0.8, 0.5 - u_VignetteStrength * 0.5, dist);\n" +
+
+                    "    // 5. 胶片颗粒感 (增加 3A 材质感)\n" +
+                    "    float noise = hash(vUV + fract(u_Time));\n" +
+                    "    color += (noise - 0.5) * u_GrainAmount;\n" +
+
+                    "    FragColor = vec4(max(color, 0.0), 1.0);\n" +
                     "}";
 
     public ScreenShader() {

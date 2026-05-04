@@ -17,8 +17,11 @@ public class AnimationShader extends GLShader {
     private static final int MAX_LIGHTS = 16;
     private final List<GLLight> lights = new ArrayList<>();
 
+    // 用于驱动水面波动
+    private static float totalTime = 0.0f;
+
     // =========================
-    // Vertex Shader (保持不变)
+    // Vertex Shader (支持骨骼动画与基础属性传递)
     // =========================
     private static String getVertexSource() {
         return "#version 450 core\n" +
@@ -65,10 +68,11 @@ public class AnimationShader extends GLShader {
     }
 
     // =========================
-    // Fragment Shader (修复冲突与包含顺序)
+    // Fragment Shader (3A 级画质核心)
     // =========================
     private static String getFragmentSource() {
         return "#version 450 core\n" +
+                "#define PI 3.14159265359\n" +
 
                 "struct PBRParams {\n" +
                 "    vec3  diffuseColor;\n" +
@@ -81,25 +85,6 @@ public class AnimationShader extends GLShader {
                 "#include \"brdf.glsl\"\n" +
                 "#include \"surface_shading.glsl\"\n" +
                 "#include \"lighting.glsl\"\n" +
-                "#include \"shading_indirect.glsl\"\n" +
-
-                // ⭐ 核心修复：定义 map 函数 (场景距离场)
-                // shadow.glsl 需要这个函数来知道光线碰到了什么
-                "float map(vec3 p) {\n" +
-                "    // 方案 A: 如果你有全局场景 SDF 文件，请在此包含：\n" +
-                "    // return scene_map(p);\n" +
-                "    \n" +
-                "    // 方案 B: 默认测试：假设在 y = -1.0 处有一个无限大的地面\n" +
-                "    float ground = p.y + 1.0;\n" +
-                "    \n" +
-                "    // 你也可以在这里添加简单的球体或其他几何体进行测试\n" +
-                "    // float sphere = length(p - vec3(0, 2, 0)) - 1.0;\n" +
-                "    // return min(ground, sphere);\n" +
-                "    \n" +
-                "    return ground;\n" +
-                "}\n" +
-
-                "#include \"shadow.glsl\"\n" +
 
                 "in vec2 vTexCoord;\n" +
                 "in vec3 vNormal;\n" +
@@ -111,22 +96,59 @@ public class AnimationShader extends GLShader {
                 "uniform vec4 u_BaseColor;\n" +
                 "uniform vec3 u_ViewPos;\n" +
                 "uniform float u_UseTexture;\n" +
+                "uniform float u_Time;\n" +
+
                 "uniform float u_IsEmissive;\n" +
                 "uniform vec3 u_EmissiveColor;\n" +
                 "uniform float u_EmissiveIntensity;\n" +
+
+                "// ⭐ 必须通过 Java 传入，否则颜色对不上\n" +
+                "uniform vec3 u_SunDir;\n" +
+                "uniform vec3 u_SunColor;\n" +
+
+                "// 改进的天空计算：加入夜间衰减\n" +
+                "vec3 evaluateSky(vec3 rd) {\n" +
+                "    vec3 L = normalize(u_SunDir);\n" +
+                "    float cosTheta = dot(rd, L);\n" +
+                "    \n" +
+                "    // 根据太阳 Y 轴高度计算亮度系数 (0.0 表示地平线以下)\n" +
+                "    float sunHeight = smoothstep(-0.2, 0.2, L.y);\n" +
+                "    \n" +
+                "    vec3 skyHorizon = vec3(0.5, 0.6, 0.75);\n" +
+                "    vec3 skyZenith = vec3(0.05, 0.15, 0.4);\n" +
+                "    \n" +
+                "    // 晚上天空会变深蓝色/黑色\n" +
+                "    vec3 skyColor = mix(skyHorizon * 0.1, skyZenith, clamp(rd.y, 0.0, 1.0)) * sunHeight;\n" +
+                "    \n" +
+                "    float sunDisk = smoothstep(0.9990, 0.9999, cosTheta) * sunHeight;\n" +
+                "    float sunGlow = pow(max(cosTheta, 0.0), 100.0) * 0.1 * sunHeight;\n" +
+                "    \n" +
+                "    return skyColor + u_SunColor * (sunDisk + sunGlow);\n" +
+                "}\n" +
+
+                "vec3 getWaterNormal(vec3 p, vec3 origN) {\n" +
+                "    float time = u_Time * 1.5;\n" +
+                "    float wave1 = sin(p.x * 2.0 + time) * 0.03;\n" +
+                "    float wave2 = cos(p.z * 1.8 - time * 0.8) * 0.02;\n" +
+                "    return normalize(vec3(-wave1, 1.0, -wave2));\n" +
+                "}\n" +
 
                 "void main() {\n" +
                 "    vec4 texColor = (u_UseTexture > 0.5) ? texture(u_DiffuseMap, vTexCoord) : vec4(1.0);\n" +
                 "    if (u_UseTexture > 0.5 && texColor.a < 0.05) discard;\n" +
 
-                "    vec3 N = normalize(vNormal);\n" +
                 "    vec3 V = normalize(u_ViewPos - vWorldPos);\n" +
+                "    vec3 N = normalize(vNormal);\n" +
+
+                "    // 判定是否是水(根据你的截图，模型Alpha通常是1.0)\n" +
+                "    bool isWater = (u_BaseColor.a < 0.6);\n" +
+                "    if(isWater) N = getWaterNormal(vWorldPos, N);\n" +
 
                 "    vec3 rawColor = u_BaseColor.rgb * texColor.rgb;\n" +
                 "    vec3 baseColor = pow(max(rawColor, 0.0), vec3(2.2));\n" +
 
                 "    float metallic = clamp(u_BaseColor.a, 0.0, 1.0);\n" +
-                "    float roughness = 0.5;\n" +
+                "    float roughness = isWater ? 0.02 : 0.4; \n" +
 
                 "    PBRParams pixel;\n" +
                 "    pixel.diffuseColor = baseColor * (1.0 - metallic);\n" +
@@ -134,26 +156,24 @@ public class AnimationShader extends GLShader {
                 "    pixel.roughness = roughness;\n" +
                 "    pixel.metallic = metallic;\n" +
 
-                "    // --- 光线追踪计算 ---\n" +
-                "    float shadow = 1.0;\n" +
-                "    if (u_LightCount > 0) {\n" +
-                "        // 获取主光源（假设是第一个方向光）\n" +
-                "        vec3 L = (u_Lights[0].type == 0) ? normalize(-u_Lights[0].direction) : normalize(u_Lights[0].position - vWorldPos);\n" +
-                "        // 只有向光面才进行昂贵的阴影追踪\n" +
-                "        if(dot(N, L) > 0.0) {\n" +
-                "            shadow = calculateSoftShadow(vWorldPos + N * 0.02, L, 0.01, 20.0, 32.0);\n" +
-                "        } else { shadow = 0.0; }\n" +
-                "    }\n" +
-                "    float ao = calculateAO(vWorldPos, N);\n" +
+                "    // 1. 直接光 (这里受 Java 层的 sunLight.setIntensity 影响)\n" +
+                "    vec3 Lo = evaluateLights(pixel, N, V, vWorldPos);\n" +
 
-                "    vec3 Lo = vec3(0.0);\n" +
-                "    Lo += evaluateLights(pixel, N, V, vWorldPos) * (shadow * 0.8 + 0.2);\n" + // 给一点环境底色
-                "    Lo *= ao;\n" +
+                "    // 2. 动态环境光 (解决发光问题的关键)\n" +
+                "    vec3 R = reflect(-V, N);\n" +
+                "    vec3 skyRadiance = evaluateSky(N);\n" +
+                "    vec3 reflectionRadiance = evaluateSky(R);\n" +
+                "    \n" +
+                "    // 环境漫反射 + 环境镜面反射 (带菲涅尔)\n" +
+                "    vec3 ambient = skyRadiance * 0.2 * baseColor;\n" +
+                "    vec3 F = pixel.f0 + (1.0 - pixel.f0) * pow(1.0 - max(dot(N, V), 0.0), 5.0);\n" +
+                "    vec3 reflection = reflectionRadiance * F * (1.0 - roughness);\n" +
+                "    \n" +
+                "    Lo += ambient + reflection;\n" +
 
-                "    if (u_IsEmissive > 0.5) {\n" +
-                "        Lo += u_EmissiveColor * u_EmissiveIntensity;\n" +
-                "    }\n" +
+                "    if (u_IsEmissive > 0.5) Lo += u_EmissiveColor * u_EmissiveIntensity;\n" +
 
+                "    // ACES Tone Mapping\n" +
                 "    Lo = (Lo * (2.51 * Lo + 0.03)) / (Lo * (2.43 * Lo + 0.59) + 0.14);\n" +
                 "    FragColor = vec4(pow(max(Lo, 0.0), vec3(1.0/2.2)), texColor.a * u_BaseColor.a);\n" +
                 "}\n";
@@ -163,13 +183,17 @@ public class AnimationShader extends GLShader {
         super("AnimationShader", getVertexSource(), getFragmentSource());
     }
 
+    public void updateTime(float dt) {
+        totalTime += dt;
+    }
+
     public void setup(Matrix4f viewProj, Matrix4f model, Color color) {
         this.bind();
         this.setUniform("u_ViewProjection", viewProj);
         this.setUniform("u_Model", model);
         this.setUniform("u_BaseColor", new Vector4f(color.r, color.g, color.b, color.a));
-
         this.setUniform("u_DiffuseMap", 0);
+        this.setUniform("u_Time", totalTime);
 
         int blockIndex = glGetUniformBlockIndex(getRendererID_Internal(), "BoneBlock");
         if (blockIndex != GL_INVALID_INDEX) {
@@ -177,31 +201,21 @@ public class AnimationShader extends GLShader {
         }
     }
 
-    /**
-     * 核心修复：应用光照数据
-     */
     public void applyLights(Vector3f viewPos) {
         this.bind();
         this.setUniform("u_ViewPos", viewPos != null ? viewPos : new Vector3f(0));
 
-        // ⭐ 修复 2：回归 int 类型。GLSL 330 里的循环迭代器必须是 int。
-        // 如果你的 GLShader 只有 setUniform(String, float)，请在该类中添加 setUniform(String, int)
         int count = Math.min(lights.size(), MAX_LIGHTS);
         this.setUniform("u_LightCount", count);
 
         for (int i = 0; i < count; i++) {
             GLLight l = lights.get(i);
             String prefix = "u_Lights[" + i + "].";
-
-            // ⭐ 修复 3：Light 结构体中的 type 必须是 int，对应 calculateAttenuation 等逻辑
             this.setUniform(prefix + "type", l.getType());
-
             this.setUniform(prefix + "position", l.getPosition() != null ? l.getPosition() : new Vector3f(0));
             this.setUniform(prefix + "direction", l.getDirection() != null ? l.getDirection() : new Vector3f(0, -1, 0));
-
             Color c = l.getColor();
             this.setUniform(prefix + "color", new Vector4f(c.r, c.g, c.b, c.a));
-
             this.setUniform(prefix + "intensity", l.getIntensity());
             this.setUniform(prefix + "range", l.getRange() > 0 ? l.getRange() : 1000.0f);
             this.setUniform(prefix + "innerCutOff", (float)Math.cos(Math.toRadians(l.getInnerCutOff())));
@@ -209,6 +223,8 @@ public class AnimationShader extends GLShader {
             this.setUniform(prefix + "ambientStrength", l.getAmbientStrength());
         }
     }
+
+    // --- 保留原有 API 接口 ---
 
     public void setEmissive(boolean emissive, Vector3f color, float intensity) {
         this.bind();
@@ -219,6 +235,11 @@ public class AnimationShader extends GLShader {
         }
     }
 
+    public void setUseTexture(boolean use) {
+        this.bind();
+        this.setUniform("u_UseTexture", use ? 1.0f : 0.0f);
+    }
+
     public void addLight(GLLight light) {
         if (!lights.contains(light) && lights.size() < MAX_LIGHTS) {
             lights.add(light);
@@ -227,10 +248,5 @@ public class AnimationShader extends GLShader {
 
     public void clearLights() {
         lights.clear();
-    }
-
-    public void setUseTexture(boolean use) {
-        this.bind();
-        this.setUniform("u_UseTexture", use ? 1.0f : 0.0f);
     }
 }

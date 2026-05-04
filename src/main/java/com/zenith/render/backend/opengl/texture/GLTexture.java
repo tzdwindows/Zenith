@@ -85,44 +85,34 @@ public class GLTexture extends Texture {
      */
     private void uploadToGPU(ByteBuffer data, boolean isSingleChannel) {
         boolean useDSA = GL.getCapabilities().OpenGL45;
-        boolean isLarge = width >= LARGE_TEXTURE_THRESHOLD || height >= LARGE_TEXTURE_THRESHOLD;
         int internalFormat = isSingleChannel ? GL_R8 : GL_RGBA8;
         int format = isSingleChannel ? GL_RED : GL_RGBA;
 
         if (useDSA) {
-            // --- 现代优化路径 (DSA + Immutable Storage) ---
             this.rendererID = glCreateTextures(GL_TEXTURE_2D);
+            // 【强制改为 1 层，不使用 Mipmap 进行排查】
+            int levels = 1;
 
-            // 计算 Mipmap 层级数
-            int levels = isLarge ? (int) (Math.floor(Math.log(Math.max(width, height)) / Math.log(2)) + 1) : 1;
-
-            // 分配不可变存储
             glTextureStorage2D(rendererID, levels, internalFormat, width, height);
 
             if (data != null) {
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
                 glTextureSubImage2D(rendererID, 0, 0, 0, width, height, format, GL_UNSIGNED_BYTE, data);
-                if (levels > 1) glGenerateTextureMipmap(rendererID);
             }
 
-            glTextureParameteri(rendererID, GL_TEXTURE_MIN_FILTER, levels > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+            // 【关键修复】确保采样器设置绝对匹配层级
+            glTextureParameteri(rendererID, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
             glTextureParameteri(rendererID, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             glTextureParameteri(rendererID, GL_TEXTURE_WRAP_S, GL_REPEAT);
             glTextureParameteri(rendererID, GL_TEXTURE_WRAP_T, GL_REPEAT);
         } else {
-            // --- 传统兼容路径 ---
+            // 传统路径同理
             this.rendererID = glGenTextures();
             glBindTexture(GL_TEXTURE_2D, rendererID);
-
             glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, isLarge ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-
             glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, GL_UNSIGNED_BYTE, data);
-            if (isLarge) glGenerateMipmap(GL_TEXTURE_2D);
-
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             glBindTexture(GL_TEXTURE_2D, 0);
         }
     }
