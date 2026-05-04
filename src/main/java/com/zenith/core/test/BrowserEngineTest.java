@@ -55,7 +55,7 @@ public class BrowserEngineTest  extends ZenithEngine {
         // 放置在屏幕中间 (1280x720 窗口，大小 1000x600，居中坐标大约为 140, 60)
         browserComponent = new HTMLComponent(
                 cefClient,
-                "https://www.bilibili.com", // 测试 B站，验证视频渲染、滚动和输入框
+                "https://browserbench.org/", // 测试 B站，验证视频渲染、滚动和输入框
                 140, 60, 1000, 600
         );
 

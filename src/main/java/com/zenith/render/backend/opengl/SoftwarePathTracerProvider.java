@@ -29,43 +29,61 @@ import static org.lwjgl.opengl.GL43.*;
 public class SoftwarePathTracerProvider implements RayTracingProvider {
 
     private GLComputeShader computeShader;
+    private GLComputeShader denoiseShader; // 引入降噪着色器
     private GLSSBO vertexBuffer;
     private GLSSBO bvhBuffer;
+
+    // --- 新增：工业降噪需要的内部 G-Buffer 纹理 ---
+    private int accumTexture = 0;
+    private int normalDepthTexture = 0;
+    private int rtWidth = 0;
+    private int rtHeight = 0;
 
     private int sampleCount = 0;
     private int vertexCount = 0;
     private int bvhNodeCount = 0;
-
-    // RT vertex packing: Pos4 + Normal4 + TexCoord4 + Color4
     private static final int RT_STRIDE = 16;
-
-    // Optional material/texture plumbing for more realistic path tracing tests.
     private final Map<Mesh, Integer> meshMaterialIds = new IdentityHashMap<>();
     private int albedoTextureId = 0;
 
     @Override
     public void init(int width, int height) {
         try {
-            String source = AssetResource
-                    .loadFromResources("shaders/rt/pathtrace.comp")
-                    .readAsString();
+            String ptSource = AssetResource.loadFromResources("shaders/rt/pathtrace.comp").readAsString();
+            String dnSource = AssetResource.loadFromResources("shaders/rt/atrous_denoise.comp").readAsString();
 
             Map<String, String> defines = new HashMap<>();
             defines.put("SCREEN_WIDTH", String.valueOf(width));
             defines.put("SCREEN_HEIGHT", String.valueOf(height));
-            String safeMode = System.getProperty("zenith.rt.safeMode", "0");
-            if ("1".equals(safeMode) || "true".equalsIgnoreCase(safeMode)) {
-                defines.put("ZENITH_RT_SAFE_MODE", "1");
-            } else {
-                defines.put("ZENITH_RT_SAFE_MODE", "0");
-            }
+            defines.put("ZENITH_RT_SAFE_MODE", "0");
 
-            computeShader = new GLComputeShader("SoftwarePathTracer", source, defines);
+            computeShader = new GLComputeShader("SoftwarePathTracer", ptSource, defines);
+            denoiseShader = new GLComputeShader("SVGF_Denoiser", dnSource, defines);
+
             vertexBuffer = new GLSSBO(2);
             bvhBuffer = new GLSSBO(3);
 
         } catch (IOException e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    private void allocateGBuffers(int w, int h) {
+        if (w != rtWidth || h != rtHeight) {
+            rtWidth = w;
+            rtHeight = h;
+            if (accumTexture != 0) glDeleteTextures(accumTexture);
+            if (normalDepthTexture != 0) glDeleteTextures(normalDepthTexture);
+
+            // 分配极高精度的 32F 累加纹理，避免数据丢失
+            accumTexture = glGenTextures();
+            glBindTexture(GL_TEXTURE_2D, accumTexture);
+            glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, w, h);
+
+            // 分配法线与深度 G-Buffer
+            normalDepthTexture = glGenTextures();
+            glBindTexture(GL_TEXTURE_2D, normalDepthTexture);
+            glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, w, h);
         }
     }
 
@@ -76,16 +94,10 @@ public class SoftwarePathTracerProvider implements RayTracingProvider {
         float[] bvhData = builder.build();
         bvhNodeCount = bvhData.length / 8;
 
-        // Important: BVHBuilder permutes triangle order via triIndices. The traversal shader
-        // assumes triangles are stored linearly in the same order as the BVH leaf ranges.
-        // So we must reorder the vertex array to match the final triIndices ordering.
         int[] triOrder = builder.getTriIndices();
         float[] reordered = new float[triOrder.length * 3 * RT_STRIDE];
         for (int i = 0; i < triOrder.length; i++) {
-            int triIdx = triOrder[i];
-            int srcTriBase = triIdx * 3 * RT_STRIDE;
-            int dstTriBase = i * 3 * RT_STRIDE;
-            System.arraycopy(rtVertices, srcTriBase, reordered, dstTriBase, 3 * RT_STRIDE);
+            System.arraycopy(rtVertices, triOrder[i] * 3 * RT_STRIDE, reordered, i * 3 * RT_STRIDE, 3 * RT_STRIDE);
         }
 
         vertexCount = reordered.length / RT_STRIDE;
@@ -96,20 +108,24 @@ public class SoftwarePathTracerProvider implements RayTracingProvider {
 
     @Override
     public void trace(SceneFramebuffer fbo, Camera camera) {
-        if (computeShader == null || vertexCount <= 0 || bvhNodeCount <= 0) {
-            return;
-        }
+        if (computeShader == null || vertexCount <= 0 || bvhNodeCount <= 0) return;
+
+        allocateGBuffers(fbo.getWidth(), fbo.getHeight());
         sampleCount++;
+
+        // ==================== PASS 1: 路径追踪核心 ====================
         computeShader.bind();
         vertexBuffer.bind();
         bvhBuffer.bind();
 
-        // Raster base-color buffer (hybrid mode uses it; full mode can still reuse it for debug).
+        // 绑定 G-Buffer (注意！这里 accumTexture 必须是 READ_WRITE！)
+        glBindImageTexture(0, accumTexture, 0, false, 0, GL_READ_WRITE, GL_RGBA32F);
+        glBindImageTexture(1, normalDepthTexture, 0, false, 0, GL_WRITE_ONLY, GL_RGBA32F);
+
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, fbo.getSceneTextureID());
         computeShader.setUniform("u_BaseColor", 1);
 
-        // Optional albedo texture for full path tracing mode (material test).
         if (albedoTextureId != 0) {
             glActiveTexture(GL_TEXTURE4);
             glBindTexture(GL_TEXTURE_2D, albedoTextureId);
@@ -119,42 +135,56 @@ public class SoftwarePathTracerProvider implements RayTracingProvider {
             computeShader.setUniform("u_HasAlbedoTex", 0);
         }
 
-        // We only write the output image in the path tracer.
-        glBindImageTexture(0, fbo.getRayTraceTargetID(), 0, false, 0, GL_WRITE_ONLY, GL_RGBA16F);
-
-        org.joml.Matrix4f invVP = new org.joml.Matrix4f(camera.getProjection().getMatrix())
-                .mul(camera.getViewMatrix())
-                .invert();
+        org.joml.Matrix4f invVP = new org.joml.Matrix4f(camera.getProjection().getMatrix()).mul(camera.getViewMatrix()).invert();
         computeShader.setUniform("u_InvViewProj", invVP);
         computeShader.setUniform("u_CamPos", camera.getTransform().getPosition());
-
-        computeShader.setUniform("u_CamForward", camera.getForward());
         computeShader.setUniform("u_CamRight", camera.getRight());
         computeShader.setUniform("u_CamUp", camera.getUp());
 
         computeShader.setUniform("u_MaxBounces", 3);
         computeShader.setUniform("u_Aperture", 0.00f);
         computeShader.setUniform("u_FocalDist", 60.0f);
-
-        org.joml.Vector3f sunDir = new org.joml.Vector3f(0.5f, 0.6f, -0.5f).normalize();
-        computeShader.setUniform("u_SunDirection", sunDir);
+        computeShader.setUniform("u_SunDirection", new org.joml.Vector3f(0.5f, 0.6f, -0.5f).normalize());
         computeShader.setUniform("u_SunColor", new org.joml.Vector3f(15.0f, 13.0f, 10.0f));
         computeShader.setUniform("u_SunRadius", 0.03f);
         computeShader.setUniform("u_RTMode", com.zenith.common.config.RayTracingConfig.RT_MODE);
-
         computeShader.setUniform("u_VertexCount", vertexCount);
         computeShader.setUniform("u_BvhNodeCount", bvhNodeCount);
         computeShader.setUniform("u_SampleCount", sampleCount);
+        computeShader.setUniform("u_Time", (float)System.currentTimeMillis() / 1000.0f); // 补充u_Time
 
-        glDispatchCompute((int) Math.ceil(fbo.getWidth() / 8.0), (int) Math.ceil(fbo.getHeight() / 8.0), 1);
+        int groupsX = (int) Math.ceil(fbo.getWidth() / 8.0);
+        int groupsY = (int) Math.ceil(fbo.getHeight() / 8.0);
+        glDispatchCompute(groupsX, groupsY, 1);
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+        // ==================== PASS 2: A-Trous 工业降噪器 ====================
+        denoiseShader.bind();
+        // 最终输出回写给屏幕
+        glBindImageTexture(0, fbo.getRayTraceTargetID(), 0, false, 0, GL_WRITE_ONLY, GL_RGBA16F);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, accumTexture);
+        denoiseShader.setUniform("u_AccumTex", 0);
+
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, normalDepthTexture);
+        denoiseShader.setUniform("u_NormalDepthTex", 1);
+
+        denoiseShader.setUniform("u_SampleCount", sampleCount);
+
+        glDispatchCompute(groupsX, groupsY, 1);
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
     }
 
     @Override
     public void dispose() {
         if (computeShader != null) computeShader.dispose();
+        if (denoiseShader != null) denoiseShader.dispose();
         if (vertexBuffer != null) vertexBuffer.dispose();
         if (bvhBuffer != null) bvhBuffer.dispose();
+        if (accumTexture != 0) glDeleteTextures(accumTexture);
+        if (normalDepthTexture != 0) glDeleteTextures(normalDepthTexture);
     }
 
     public void resetAccumulation() { sampleCount = 0; }

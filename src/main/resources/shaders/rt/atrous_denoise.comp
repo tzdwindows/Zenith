@@ -1,0 +1,72 @@
+#version 430 core
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(rgba16f, binding = 0) uniform writeonly image2D imgOutput;
+layout(binding = 0) uniform sampler2D u_AccumTex;
+layout(binding = 1) uniform sampler2D u_NormalDepthTex;
+
+uniform int u_SampleCount;
+
+void main() {
+    ivec2 pixelCoords = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 res = imageSize(imgOutput);
+    if (pixelCoords.x >= res.x || pixelCoords.y >= res.y) return;
+
+    vec4 centerNormDepth = texelFetch(u_NormalDepthTex, pixelCoords, 0);
+    vec3 centerNorm = centerNormDepth.xyz;
+    float centerDepth = centerNormDepth.w;
+    vec3 centerColor = texelFetch(u_AccumTex, pixelCoords, 0).rgb;
+
+    // 天空跳过模糊
+    if (centerDepth >= 1e19) {
+        vec3 finalColor = (centerColor * (2.51 * centerColor + 0.03)) / (centerColor * (2.43 * centerColor + 0.59) + 0.14);
+        imageStore(imgOutput, pixelCoords, vec4(pow(max(finalColor, 0.0), vec3(1.0 / 2.2)), 1.0));
+        return;
+    }
+
+    // 智能步长：刚移动鼠标噪点很大时步长大(模糊范围大)，静止时关闭模糊追求极致锐度
+    int stepSize = (u_SampleCount < 4) ? 2 : ((u_SampleCount < 16) ? 1 : 0);
+
+    // 5x5 A-Trous 近似高斯核
+    const float kernel[25] = float[](
+    1.0/256.0, 4.0/256.0,  6.0/256.0,  4.0/256.0,  1.0/256.0,
+    4.0/256.0, 16.0/256.0, 24.0/256.0, 16.0/256.0, 4.0/256.0,
+    6.0/256.0, 24.0/256.0, 36.0/256.0, 24.0/256.0, 6.0/256.0,
+    4.0/256.0, 16.0/256.0, 24.0/256.0, 16.0/256.0, 4.0/256.0,
+    1.0/256.0, 4.0/256.0,  6.0/256.0,  4.0/256.0,  1.0/256.0
+    );
+
+    if (stepSize > 0) {
+        vec3 sumColor = vec3(0.0);
+        float sumWeight = 0.0;
+
+        float phiNormal = 128.0;
+        float phiDepth  = max(centerDepth * 0.1, 0.01);
+
+        for (int y = -2; y <= 2; y++) {
+            for (int x = -2; x <= 2; x++) {
+                ivec2 offset = ivec2(x, y) * stepSize;
+                ivec2 p = clamp(pixelCoords + offset, ivec2(0), res - 1);
+
+                vec3 color = texelFetch(u_AccumTex, p, 0).rgb;
+                vec4 normDepth = texelFetch(u_NormalDepthTex, p, 0);
+
+                float w_h = kernel[(y + 2) * 5 + (x + 2)];
+
+                // 边缘保护：如果相邻像素的法线或深度和中心点相差极大，权重归零（不混合）
+                vec3 nDiff = centerNorm - normDepth.xyz;
+                float w_n = exp(-max(dot(nDiff, nDiff), 0.0) * phiNormal);
+                float w_d = exp(-abs(centerDepth - normDepth.w) / phiDepth);
+
+                float w = w_h * w_n * w_d;
+                sumColor += color * w;
+                sumWeight += w;
+            }
+        }
+        centerColor = sumColor / max(sumWeight, 1e-5);
+    }
+
+    // ACES 色调映射最后执行，保证色彩不失真
+    vec3 finalColor = (centerColor * (2.51 * centerColor + 0.03)) / (centerColor * (2.43 * centerColor + 0.59) + 0.14);
+    imageStore(imgOutput, pixelCoords, vec4(pow(max(finalColor, 0.0), vec3(1.0 / 2.2)), 1.0));
+}
